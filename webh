@@ -28,6 +28,8 @@ local SECRETS = {
     "kraken",
     "Yeti",
     "tralaledon",
+    "trex",
+
 
 
 }
@@ -40,6 +42,8 @@ local ETERNALS = {
     "ice dragon",
     "mosasaurus",
     "el maja",
+    "phoenix",
+    "lava dragon",
 
 }
 
