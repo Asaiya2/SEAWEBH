@@ -1,0 +1,216 @@
+print("Running script")
+-- ============================================================
+--  [WORST NOTIFIER] - egg spawn alerts (v6)
+-- ============================================================
+
+local WEBHOOK_URL = "https://discord.com/api/webhooks/1552342833233666110/0-_ra6WC1W-jqqrOcN699P27rldTI2Mgst-2Rrv5UIr4mIWW2tOt-bKkwhJmYemrx807"
+
+-- Set to true to send one test embed per rarity when the script runs.
+-- NOTE: tests ping your real roles. Use a private channel or blank the ROLE_IDS.
+local TEST_MODE = false
+
+local HttpService        = game:GetService("HttpService")
+local TextChatService    = game:GetService("TextChatService")
+local MarketplaceService = game:GetService("MarketplaceService")
+
+
+local COOLDOWN = 10
+
+
+local SECRETS = {
+    "razorfang",
+    "gargoyle",
+    "centaur",
+    "pure jellyfish",
+    "mutant shark",
+    "cosmic skeleton",
+    "cerberus",
+    "kraken",
+    "Yeti",
+    "tralaledon",
+
+
+}
+
+local ETERNALS = {
+    "skeleton horse",
+    "pegasus",
+    "oni tiger",
+    "gorilla king",
+    "ice dragon",
+    "mosasaurus",
+    "el maja",
+
+}
+
+local DIVINES = {
+    "world burner",
+    "archangel",
+    "nightflame",
+    "kitsune",
+    "unicorn",
+}
+
+
+local ROLE_IDS = {
+    Secret  = "1552345277459988480",
+    Eternal = "1552345217640698036",
+    Divine  = "1552345257599836160",
+}
+
+
+local STYLE = {
+    Secret = {
+        color = 0xE74C3C, 
+        emoji = "🔮",
+        title = "SECRET EGG SPAWNED",
+        tag   = "A Hidden Egg has appeared!",
+    },
+    Eternal = {
+        color = 0x9B59B6, 
+        emoji = "♾️",
+        title = "ETERNAL EGG SPAWNED",
+        tag   = "An Endless Egg has awakened!",
+    },
+    Divine = {
+        color = 0xF1C40F, 
+        emoji = "✨",
+        title = "DIVINE EGG SPAWNED",
+        tag   = "A Heavenly Egg has descended!",
+    },
+}
+
+local BOT_NAME   = "WORST NOTIFIER"
+local BOT_AVATAR = "https://t3.ftcdn.net/jpg/03/56/50/38/360_F_356503809_vas1u5ohd44mvLFSaNfUthgpWCTJNCD9.jpg" -- optional: paste an image URL here
+-- ============================================================
+
+local EGG_LOOKUP = {}
+for _, name in ipairs(SECRETS)  do EGG_LOOKUP[name:lower()] = "Secret"  end
+for _, name in ipairs(ETERNALS) do EGG_LOOKUP[name:lower()] = "Eternal" end
+for _, name in ipairs(DIVINES)  do EGG_LOOKUP[name:lower()] = "Divine"  end
+
+local httpRequest = request or http_request or (syn and syn.request)
+
+-- Game name (falls back to game.Name if the lookup is blocked)
+local GAME_NAME = game.Name
+task.spawn(function()
+    local ok, info = pcall(function()
+        return MarketplaceService:GetProductInfo(game.PlaceId)
+    end)
+    if ok and info and info.Name then
+        GAME_NAME = info.Name
+    end
+end)
+
+local function stripTags(text)
+    return (text:gsub("<[^>]->", ""))
+end
+
+local function prettyName(name)
+    return (name:gsub("(%a)([%w']*)", function(a, b)
+        return a:upper() .. b:lower()
+    end))
+end
+
+local function sendPayload(payload)
+    if not httpRequest then
+        warn("[WORST NOTIFIER] No HTTP request function found in this executor.")
+        return
+    end
+    pcall(function()
+        httpRequest({
+            Url     = WEBHOOK_URL,
+            Method  = "POST",
+            Headers = { ["Content-Type"] = "application/json" },
+            Body    = HttpService:JSONEncode(payload),
+        })
+    end)
+end
+
+-- Parse: "A Eternal Gorilla King Egg spawned in Titan Temple"
+-- Returns: eggName, tier
+local function parseEggMessage(clean)
+    local rarity, eggName = clean:match("[Aa]n?%s+(%a+)%s+(.-)%s+spawned%s+in")
+    if not rarity or not eggName then return nil end
+
+    rarity = rarity:lower()
+    if rarity ~= "secret" and rarity ~= "eternal" and rarity ~= "divine" then
+        return nil
+    end
+
+    eggName = eggName:lower():gsub("%s+$", "")
+    eggName = eggName:gsub("%s+egg$", "")
+
+    local tier = EGG_LOOKUP[eggName]
+    if not tier then return nil end
+
+    return eggName, tier
+end
+
+local function sendEggEmbed(eggName, tier)
+    local style   = STYLE[tier]
+    local roleId  = ROLE_IDS[tier]
+    local mention = roleId and ("<@&" .. roleId .. ">") or ""
+    local name    = prettyName(eggName) .. " Egg"
+    local now     = os.time()
+
+    sendPayload({
+        username         = BOT_NAME,
+        avatar_url       = (BOT_AVATAR ~= "") and BOT_AVATAR or nil,
+        content          = mention .. " " .. style.emoji .. " **" .. name .. "** just spawned!",
+        allowed_mentions = { parse = { "roles" } },
+        embeds = {{
+            title       = style.emoji .. "  " .. style.title .. "  " .. style.emoji,
+            description = "*" .. style.tag .. "*",
+            color       = style.color,
+            fields = {
+                { name = "🥚 Egg",    value = "**" .. name .. "**", inline = true },
+                { name = "💎 Rarity", value = "**" .. tier .. "**", inline = true },
+                -- Discord's built-in relative timestamp: counts up on its own
+                { name = "⏱️ Time Lapsed", value = "**<t:" .. now .. ":R>**", inline = true },
+                { name = "🎮 GAME NAME", value = "```" .. GAME_NAME .. "```", inline = false },
+            },
+            footer    = { text = "https://discord.gg/hTNwM78Qg2 • " .. tier .. " Alert" },
+            timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ", now),
+        }},
+    })
+end
+
+-- ============================================================
+--  DEDUPE - same egg is ignored during the cooldown
+-- ============================================================
+local lastSeen = {}
+
+-- ============================================================
+--  MAIN LISTENER
+-- ============================================================
+TextChatService.MessageReceived:Connect(function(msg)
+    if msg.TextSource then return end -- ignore player messages entirely
+
+    local clean = stripTags(msg.Text)
+
+    local eggName, tier = parseEggMessage(clean)
+    if not eggName then return end
+
+    local last = lastSeen[eggName]
+    if last and os.clock() - last < COOLDOWN then return end
+    lastSeen[eggName] = os.clock()
+
+    sendEggEmbed(eggName, tier)
+end)
+
+-- ============================================================
+--  TEST MODE
+-- ============================================================
+if TEST_MODE then
+    task.spawn(function()
+        task.wait(1) -- let the game name lookup finish
+        sendEggEmbed("unicorn", "Divine")
+        task.wait(1)
+        sendEggEmbed("gorilla king", "Eternal")
+        task.wait(1)
+        sendEggEmbed("razorfang", "Secret")
+    end)
+end
+
+print("[WORST NOTIFIER] running!")
