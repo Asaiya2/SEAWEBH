@@ -37,7 +37,7 @@ local SECRETS = {
 }
 local ETERNALS = {
     "skeleton horse","pegasus","oni tiger","gorilla king","ice dragon",
-    "mosasaurus","el maja","phoenix","lava dragon",
+    "mosasaurus","el maja","phoenix","lava dragon","eternal lunar dragon",
 }
 local DIVINES = {
     "world burner","archangel","nightflame","kitsune","unicorn",
