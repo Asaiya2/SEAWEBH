@@ -160,7 +160,7 @@ local function sendEggEmbed(eggName, tier)
                 { name = "⏱️ Time Lapsed", value = "**<t:" .. now .. ":R>**", inline = true },
                 { name = "🎮 GAME NAME", value = "```" .. GAME_NAME .. "```", inline = false },
             },
-            footer    = { text = "https://discord.gg/hTNwM78Qg2 • " .. tier .. " Alert" },
+            footer    = { text = "https://discord.gg/Hk7QN5un5k • " .. tier .. " Alert" },
             timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ", now),
         }},
     })
@@ -327,7 +327,7 @@ local function sendStatus(zones, total)
             description = string.format("🟢 **%d ON**  ·  updated <t:%d:R>", total, now),
             color  = 0x2ECC71,
             fields = fields,
-            footer = { text = "https://discord.gg/hTNwM78Qg2" },
+            footer = { text = "https://discord.gg/Hk7QN5un5k" },
             timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ", now),
         }},
     })
