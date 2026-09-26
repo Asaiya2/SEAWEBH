@@ -1,47 +1,212 @@
 print("Running egg script")
 -- ============================================================
---  EGG STATUS + RARE EGG NOTIFIER (combined)
---  1) Zone status embed -> Status webhook (checks every 5s, sends 11s after a change)
---  2) Secret / Eternal / Divine chat alerts -> one webhook each
+--  EGG STATUS + RARE EGG NOTIFIER
+--
+--  1) Zone status embed -> Status webhook
+--     checks every 5s, sends 11s after a change
+--
+--  2) Secret / Eternal / Divine alerts
+--
+--  Rare alerts now include:
+--    • Egg image thumbnail
+--    • Egg Value instead of Game Name
+--
 -- ============================================================
 
+
 -- ===================== WEBHOOKS =====================
+
 local WEBHOOKS = {
-    Status  = "https://discord.com/api/webhooks/1552793976283594932/PNbVep-6OGxtu71k9vFSCasFnY3gfMhvOb4y58mJwfKDNTgnITCBfeV_0Bvo4GuNMTEp",
-    Secret  = "https://discord.com/api/webhooks/1552833728403865651/hmgHAJBFIOBTqsZMaKpriPZPdWXA7y3MFO1PrYOA9K3U0tmRDkTVHG5j6fBDEtcS88iF",   -- Secret channel webhook
-    Eternal = "https://discord.com/api/webhooks/1552833824621076490/Eu_k7dNhQvKeId010XbRGoRVhDzQKaAk0budtH_f5CnmlsXKXueLqlGGjRR5VrbpXN7-",  -- Eternal channel webhook
-    Divine  = "https://discord.com/api/webhooks/1552833856519012454/I9Lb-MvPv_NND4nvxYFlhRWTG9rYOVDiS6NS_lQy_8884fYpa3x91uTRbT7Ovg13m1xo",   -- Divine channel webhook
+    Status  = "https://discord.com/api/webhooks/1553382833727213599/qwc2_4R0bSMq5noVaRUPH_JIFv3pFuHFyPU6kvfLxzEFKOb3GgNQZmp1zla6zM-kJxct",
+    Secret  = "https://discord.com/api/webhooks/1553382889205268511/Ozhq_O_TWHMyb_n06QJAoGu9T2CZ96Ch8Qs0FZX13Q-ABkiPeu2OvgovpNJ2D6LkbIkd",
+    Eternal = "https://discord.com/api/webhooks/1553382938035363940/Sv5pK9haNEAFeV8WesY-Fkp9c3DvKqA5nzMgEXZcspl7VnOdFcElNEEXFINEmpKW9803",
+    Divine  = "https://discord.com/api/webhooks/1553383377032450089/QaoJzX3x9CZPPPuPhHMv0rPImD1iQCw8CiFYuobOWupWFXKm8BiZY1vWOi02NGVjZak9",
 }
 
--- ===================== CHANNEL LINKS (the "View alerts" links) =====================
+
+-- ===================== CHANNEL LINKS =====================
+
 local CHANNEL_LINKS = {
-    Secret  = "https://discord.com/channels/1552339582853324942/1552833273162367016", -- Secret channel
-    Eternal = "https://discord.com/channels/1552339582853324942/1552833300660494436", -- Eternal channel
-    Divine  = "https://discord.com/channels/1552339582853324942/1552833314484920363", -- Divine channel
+    Secret  = "https://discord.com/channels/1553382455266779218/1553382455917023277",
+    Eternal = "https://discord.com/channels/1553382455266779218/1553382455917023278",
+    Divine  = "https://discord.com/channels/1553382455266779218/1553382455917023279",
 }
+
 
 -- ===================== STATUS SETTINGS =====================
-local CHECK_INTERVAL    = 5      -- seconds between checks
-local SEND_DELAY        = 11     -- seconds after a change before sending
-local IGNORE_FIRST_AREA = false  -- true = skip starter "FirstAreaEgg" slots
+
+local CHECK_INTERVAL    = 5
+local SEND_DELAY        = 11
+local IGNORE_FIRST_AREA = false
+
 local STATUS_BOT_NAME   = "WORST NOTIFIER"
-local STATUS_BOT_AVATAR = "https://t3.ftcdn.net/jpg/03/56/50/38/360_F_356503809_vas1u5ohd44mvLFSaNfUthgpWCTJNCD9.jpg"
+
+local STATUS_BOT_AVATAR =
+    "https://t3.ftcdn.net/jpg/03/56/50/38/360_F_356503809_vas1u5ohd44mvLFSaNfUthgpWCTJNCD9.jpg"
+
 
 -- ===================== NOTIFIER SETTINGS =====================
-local TEST_MODE = false  -- true = sends one test embed per rarity on run (pings real roles!)
+
+local TEST_MODE = false
 local COOLDOWN  = 10
 
+
+-- ============================================================
+--  RARE EGG LISTS
+-- ============================================================
+
 local SECRETS = {
-    "razorfang","gargoyle","centaur","pure jellyfish","mutant shark",
-    "cosmic skeleton boss","cosmic dragon","cerberus","kraken","Yeti","tralaledon","trex",
+    "razorfang",
+    "gargoyle",
+    "centaur",
+    "pure jellyfish",
+    "mutant shark",
+    "cosmic skeleton",
+    "cosmic dragon",
+    "cerberus",
+    "kraken",
+    "yeti",
+    "tralaledon",
+    "trex",
 }
+
 local ETERNALS = {
-    "skeleton horse","pegasus","oni tiger","gorilla king","ice dragon",
-    "mosasaurus","el maja","phoenix","lava dragon","eternal lunar dragon",
+    "skeleton horse",
+    "pegasus",
+    "oni tiger",
+    "gorilla king",
+    "ice dragon",
+    "mosasaurus",
+    "el maja",
+    "phoenix",
+    "lava dragon",
+    "eternal lunar dragon",
 }
+
 local DIVINES = {
-    "world burner","archangel","nightflame","kitsune","unicorn",
+    "world burner",
+    "archangel",
+    "nightflame",
+    "kitsune",
+    "unicorn",
 }
+
+
+-- ============================================================
+--  EGG IMAGES
+--
+--  Keys MUST use lowercase names because the detector
+--  converts detected egg names to lowercase.
+--
+--  Add Secret / Eternal images yourself.
+-- ============================================================
+
+local EGG_IMAGES = {
+
+    -- ==================== DIVINE ====================
+
+    ["kitsune"] = "https://asaiya2.github.io/steal-an-egg/Kitsune.png",
+
+    ["nightflame"] = "https://asaiya2.github.io/steal-an-egg/Nightflame.png",
+
+    ["world burner"] = "https://asaiya2.github.io/steal-an-egg/World_Burner.png",
+
+    ["archangel"] = "https://asaiya2.github.io/steal-an-egg/ArchAngel.png",
+
+    ["unicorn"] = "https://asaiya2.github.io/steal-an-egg/Unicorn.png",
+
+
+    -- ==================== ETERNAL ====================
+
+    ["skeleton horse"] = "https://asaiya2.github.io/steal-an-egg/Skeleton_horse.png",
+    ["pegasus"] = "https://asaiya2.github.io/steal-an-egg/Pegasus.png",
+    ["oni tiger"] = "https://asaiya2.github.io/steal-an-egg/Oni_Tiger.png",
+    ["gorilla king"] = "https://asaiya2.github.io/steal-an-egg/Gorrila.png",
+    ["ice dragon"] = "https://asaiya2.github.io/steal-an-egg/Ice_Dragon.png",
+    ["mosasaurus"] = "https://asaiya2.github.io/steal-an-egg/Mosasaur.png",
+    ["el maja"] = "https://asaiya2.github.io/steal-an-egg/El_maja.png",
+    ["phoenix"] = "https://asaiya2.github.io/steal-an-egg/phoenix.png",
+    ["lava dragon"] = "https://asaiya2.github.io/steal-an-egg/Lava_Dragon.png",
+    ["eternal lunar dragon"] = "https://asaiya2.github.io/steal-an-egg/Lunar_Dragon.png",
+
+
+    -- ==================== SECRET ====================
+
+    ["razorfang"] = "https://asaiya2.github.io/steal-an-egg/Rock_Demon.png",
+    ["gargoyle"] = "https://asaiya2.github.io/steal-an-egg/Gargoyle_Demon.png",
+    ["centaur"] = "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQmpo9iE1MHMQNyB2lCJ6QtI4O_Stz7EvDQXu6HZ2WZTw&s",
+    ["pure jellyfish"] = "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQIXvOauCXxGctW9tMXU6YeSDuNiL8I_RxhFolmuKZy0A&s",
+    ["mutant shark"] = "https://static.wikia.nocookie.net/stealanegg/images/e/e5/Mutant_Shark.png/revision/latest?cb=20260901190802",
+    ["cosmic skeleton boss"] = "https://static.wikia.nocookie.net/stealanegg/images/9/97/Cosmic_Skeleton_Boss.png/revision/latest/scale-to-width-down/185?cb=20260904110709",
+    ["cosmic dragon"] = "https://asaiya2.github.io/steal-an-egg/Star_Dragon.png",
+    ["cerberus"] = "https://asaiya2.github.io/steal-an-egg/Cerberus_Flame.png",
+    ["kraken"] = "https://static.wikia.nocookie.net/stealanegg/images/d/d3/Kraken.png/revision/latest",
+    ["yeti"] = "https://asaiya2.github.io/steal-an-egg/White_Yeti.png",
+    ["tralaledon"] = "https://asaiya2.github.io/steal-an-egg/Block_Shark.png",
+    ["trex"] = "https://asaiya2.github.io/steal-an-egg/Block_TRex.png",
+}
+
+
+-- ============================================================
+--  EGG VALUES
+--
+--  Put the actual value for each egg here.
+--
+--  Example:
+--      ["unicorn"] = "$3B/s"
+--
+--  The webhook will display this under:
+--
+--      💰 EGG VALUE
+--
+--  instead of the old GAME NAME / "Steal An Egg".
+-- ============================================================
+
+local EGG_VALUES = {
+
+    -- ==================== DIVINE ====================
+
+    ["kitsune"] = "1.8B/s",
+    ["nightflame"] = "3B/s",
+    ["world burner"] = "5B/s",
+    ["archangel"] = "3B/s",
+    ["unicorn"] = "1B/s",
+
+
+    -- ==================== ETERNAL ====================
+
+    ["skeleton horse"] = "1.3B/s",
+    ["pegasus"] = "1.3B/s",
+    ["oni tiger"] = "600M/s",
+    ["gorilla king"] = "880M/s",
+    ["ice dragon"] = "65M/s",
+    ["mosasaurus"] = "180M/s",
+    ["el maja"] = "130M/s",
+    ["phoenix"] = "85M/s",
+    ["lava dragon"] = "100M/s",
+    ["eternal lunar dragon"] = "Shit man i don't know, never had this before",
+
+
+    -- ==================== SECRET ====================
+
+    ["razorfang"] = "350M/s",
+    ["gargoyle"] = "225M/s",
+    ["centaur"] = "350M/s",
+    ["pure jellyfish"] = "225M/s",
+    ["mutant shark"] = "215M/s",
+    ["cosmic skeleton"] = "45M/s",
+    ["cosmic dragon"] = "60M/s",
+    ["cerberus"] = "8M/s",
+    ["kraken"] = "15M/s",
+    ["yeti"] = "5M/s",
+    ["tralaledon"] = "32M/s",
+    ["trex"] = "$25M/s",
+}
+
+
+-- ============================================================
+--  ROLE IDS
+-- ============================================================
 
 local ROLE_IDS = {
     Secret  = "1552345277459988480",
@@ -49,319 +214,1092 @@ local ROLE_IDS = {
     Divine  = "1552345257599836160",
 }
 
+
+-- ============================================================
+--  WEBHOOK STYLES
+-- ============================================================
+
 local STYLE = {
-    Secret  = { color = 0xE74C3C, emoji = "🔮",  title = "SECRET EGG SPAWNED",  tag = "A Hidden Egg has appeared!" },
-    Eternal = { color = 0x9B59B6, emoji = "♾️", title = "ETERNAL EGG SPAWNED", tag = "An Endless Egg has awakened!" },
-    Divine  = { color = 0xF1C40F, emoji = "✨",  title = "DIVINE EGG SPAWNED",  tag = "A Heavenly Egg has descended!" },
+
+    Secret = {
+        color = 0xE74C3C,
+        emoji = "🔮",
+        title = "SECRET EGG SPAWNED",
+        tag = "A Hidden Egg has appeared!"
+    },
+
+    Eternal = {
+        color = 0x9B59B6,
+        emoji = "♾️",
+        title = "ETERNAL EGG SPAWNED",
+        tag = "An Endless Egg has awakened!"
+    },
+
+    Divine = {
+        color = 0xF1C40F,
+        emoji = "✨",
+        title = "DIVINE EGG SPAWNED",
+        tag = "A Heavenly Egg has descended!"
+    },
+
 }
 
+
 local BOT_NAME   = "WORST NOTIFIER"
-local BOT_AVATAR = "https://t3.ftcdn.net/jpg/03/56/50/38/360_F_356503809_vas1u5ohd44mvLFSaNfUthgpWCTJNCD9.jpg"
+
+local BOT_AVATAR =
+    "https://t3.ftcdn.net/jpg/03/56/50/38/360_F_356503809_vas1u5ohd44mvLFSaNfUthgpWCTJNCD9.jpg"
+
 
 -- ============================================================
 --  SHARED
 -- ============================================================
-local HttpService        = game:GetService("HttpService")
-local TextChatService    = game:GetService("TextChatService")
-local MarketplaceService = game:GetService("MarketplaceService")
-local RS                 = game:GetService("ReplicatedStorage")
 
-local httpRequest = request or http_request or (syn and syn.request)
+local HttpService     = game:GetService("HttpService")
+local TextChatService = game:GetService("TextChatService")
+local RS              = game:GetService("ReplicatedStorage")
+
+local httpRequest =
+    request
+    or http_request
+    or (syn and syn.request)
+
 
 local function validUrl(u)
-    return type(u) == "string" and u:find("discord.com/api/webhooks/", 1, true) ~= nil
+
+    return type(u) == "string"
+        and u:find("discord.com/api/webhooks/", 1, true) ~= nil
+
 end
 
+
 local function postWebhook(url, payload)
+
     if not httpRequest then
         warn("[EGG] No HTTP request function found in this executor.")
         return
     end
+
     if not validUrl(url) then
-        warn("[EGG] Webhook not set (still a placeholder or invalid link).")
+        warn("[EGG] Webhook not set or invalid.")
         return
     end
+
     pcall(function()
+
         httpRequest({
             Url     = url,
             Method  = "POST",
-            Headers = { ["Content-Type"] = "application/json" },
-            Body    = HttpService:JSONEncode(payload),
+
+            Headers = {
+                ["Content-Type"] = "application/json"
+            },
+
+            Body = HttpService:JSONEncode(payload),
         })
+
     end)
+
 end
 
-local function norm(s) return (tostring(s):lower():gsub("[%s_%-]", "")) end
-local function pretty(s) return (tostring(s):gsub("(%l)(%u)", "%1 %2")) end
+
+local function norm(s)
+
+    return tostring(s)
+        :lower()
+        :gsub("[%s_%-]", "")
+
+end
+
+
+local function pretty(s)
+
+    return tostring(s)
+        :gsub("(%l)(%u)", "%1 %2")
+
+end
+
 
 -- ============================================================
---  PART 1: RARE EGG CHAT NOTIFIER (Secret / Eternal / Divine)
+--  PART 1: RARE EGG CHAT NOTIFIER
 -- ============================================================
+
+
 local EGG_LOOKUP = {}
-for _, name in ipairs(SECRETS)  do EGG_LOOKUP[name:lower()] = "Secret"  end
-for _, name in ipairs(ETERNALS) do EGG_LOOKUP[name:lower()] = "Eternal" end
-for _, name in ipairs(DIVINES)  do EGG_LOOKUP[name:lower()] = "Divine"  end
 
-local GAME_NAME = game.Name
-task.spawn(function()
-    local ok, info = pcall(function()
-        return MarketplaceService:GetProductInfo(game.PlaceId)
-    end)
-    if ok and info and info.Name then GAME_NAME = info.Name end
-end)
+
+for _, name in ipairs(SECRETS) do
+    EGG_LOOKUP[name:lower()] = "Secret"
+end
+
+
+for _, name in ipairs(ETERNALS) do
+    EGG_LOOKUP[name:lower()] = "Eternal"
+end
+
+
+for _, name in ipairs(DIVINES) do
+    EGG_LOOKUP[name:lower()] = "Divine"
+end
+
+
+-- ============================================================
+--  NAME FORMATTER
+-- ============================================================
 
 local function stripTags(text)
-    return (text:gsub("<[^>]->", ""))
+
+    return text:gsub("<[^>]->", "")
+
 end
+
 
 local function prettyName(name)
-    return (name:gsub("(%a)([%w']*)", function(a, b)
+
+    return name:gsub("(%a)([%w']*)", function(a, b)
+
         return a:upper() .. b:lower()
-    end))
+
+    end)
+
 end
 
--- "A Eternal Gorilla King Egg spawned in Titan Temple" -> eggName, tier
-local function parseEggMessage(clean)
-    local rarity, eggName = clean:match("[Aa]n?%s+(%a+)%s+(.-)%s+spawned%s+in")
-    if not rarity or not eggName then return nil end
 
-    rarity = rarity:lower()
-    if rarity ~= "secret" and rarity ~= "eternal" and rarity ~= "divine" then
+-- ============================================================
+--  PARSE EGG MESSAGE
+--
+--  Example:
+--
+--  "A Divine Unicorn Egg spawned in Titan Temple"
+--
+--  becomes:
+--
+--  eggName = "unicorn"
+--  tier    = "Divine"
+-- ============================================================
+
+local function parseEggMessage(clean)
+
+    local rarity, eggName =
+        clean:match(
+            "[Aa]n?%s+(%a+)%s+(.-)%s+spawned%s+in"
+        )
+
+    if not rarity or not eggName then
         return nil
     end
 
-    eggName = eggName:lower():gsub("%s+$", "")
-    eggName = eggName:gsub("%s+egg$", "")
+
+    rarity = rarity:lower()
+
+
+    if rarity ~= "secret"
+        and rarity ~= "eternal"
+        and rarity ~= "divine" then
+
+        return nil
+
+    end
+
+
+    eggName =
+        eggName
+        :lower()
+        :gsub("%s+$", "")
+
+
+    eggName =
+        eggName:gsub("%s+egg$", "")
+
 
     local tier = EGG_LOOKUP[eggName]
-    if not tier then return nil end
+
+
+    if not tier then
+        return nil
+    end
+
+
     return eggName, tier
+
 end
+
+
+-- ============================================================
+--  SEND RARE EGG WEBHOOK
+-- ============================================================
 
 local function sendEggEmbed(eggName, tier)
-    local style   = STYLE[tier]
-    local roleId  = ROLE_IDS[tier]
-    local mention = roleId and ("<@&" .. roleId .. ">") or ""
-    local name    = prettyName(eggName) .. " Egg"
-    local now     = os.time()
 
-    postWebhook(WEBHOOKS[tier], {
-        username         = BOT_NAME,
-        avatar_url       = (BOT_AVATAR ~= "") and BOT_AVATAR or nil,
-        content          = mention .. " " .. style.emoji .. " **" .. name .. "** just spawned!",
-        allowed_mentions = { parse = { "roles" } },
-        embeds = {{
-            title       = style.emoji .. "  " .. style.title .. "  " .. style.emoji,
-            description = "*" .. style.tag .. "*",
-            color       = style.color,
-            fields = {
-                { name = "🥚 Egg",    value = "**" .. name .. "**", inline = true },
-                { name = "💎 Rarity", value = "**" .. tier .. "**", inline = true },
-                { name = "⏱️ Time Lapsed", value = "**<t:" .. now .. ":R>**", inline = true },
-                { name = "🎮 GAME NAME", value = "```" .. GAME_NAME .. "```", inline = false },
-            },
-            footer    = { text = "https://discord.gg/Hk7QN5un5k • " .. tier .. " Alert" },
-            timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ", now),
-        }},
-    })
-end
+    local style  = STYLE[tier]
+    local roleId = ROLE_IDS[tier]
 
-local lastSeen = {}
-TextChatService.MessageReceived:Connect(function(msg)
-    if msg.TextSource then return end -- ignore player messages
+    local mention =
+        roleId
+        and ("<@&" .. roleId .. ">")
+        or ""
 
-    local clean = stripTags(msg.Text)
-    local eggName, tier = parseEggMessage(clean)
-    if not eggName then return end
 
-    local last = lastSeen[eggName]
-    if last and os.clock() - last < COOLDOWN then return end
-    lastSeen[eggName] = os.clock()
+    local name =
+        prettyName(eggName) .. " Egg"
 
-    sendEggEmbed(eggName, tier)
-end)
-
-if TEST_MODE then
-    task.spawn(function()
-        task.wait(1)
-        sendEggEmbed("unicorn", "Divine")
-        task.wait(1)
-        sendEggEmbed("gorilla king", "Eternal")
-        task.wait(1)
-        sendEggEmbed("razorfang", "Secret")
-    end)
-end
-
--- ============================================================
---  PART 2: EGG STATUS (only eggs that exist right now, by zone)
--- ============================================================
-
--- rare names (normalized). Any egg whose name CONTAINS one of these is left out
--- of the status, e.g. "gargoyle" also catches "Dark Gargoyle".
-local RARE = {}
-for _, list in ipairs({ SECRETS, ETERNALS, DIVINES }) do
-    for _, n in ipairs(list) do RARE[norm(n)] = true end
-end
-
-local function isRare(k)
-    for r in pairs(RARE) do
-        if k:find(r, 1, true) then return true end
-    end
-    return false
-end
-
-local ZONE_ORDER = { "Forest","Lake","Desert","Jungle","Snow","Volcano",
-    "Abyss Ocean","Prehistoric","Cosmic","Cherry Blossom","Titan Temple","Light Dark" }
-
--- fallback zones, only used if a live egg record has no AreaId
-local ZONE_OF = {}
-for zone, names in pairs({
-    ["Forest"]={"Dog","Chicken","Raccoon"},
-    ["Lake"]={"Swan","Trulimero Trulicina","Duckling","Catfish"},
-    ["Desert"]={"FennecFox","Tob Tobi Tob Tob","Jerboa"},
-    ["Jungle"]={"Chimpanzee","Toucan","Spider"},
-    ["Snow"]={"Sabertooth Tiger","Walrus","Polar Bear"},
-    ["Volcano"]={"Lava frog","Lava Iguana","Chillin Chilli","Ash Gecko"},
-    ["Abyss Ocean"]={"Parrotfish","Orca","Swordfish"},
-    ["Prehistoric"]={"Dodo","Pterodactyl","Bronto","Ankylosaurus"},
-    ["Cosmic"]={"La Vacca Saturno Saturnita","Cyclops Gorilla","Centapede","Galaxy Gecko"},
-    ["Cherry Blossom"]={"Red Panda","Salamander","Crane","Snowy Owl"},
-    ["Titan Temple"]={"Crab","Rhino","Mantis"},
-    ["Light Dark"]={"Flame Sprite","Toro"},
-}) do
-    for _, n in ipairs(names) do ZONE_OF[norm(n)] = zone end
-end
-
--- returns zones (only zones with eggs), totalEggTypes, signature
-local function buildStatus()
-    local byZone = {}
-
-    local ok, es = pcall(function() return require(RS.Client.EggState) end)
-    if ok and es then
-        local ok2, data = pcall(es.ReadFieldEggs)
-        if ok2 and type(data) == "table" then
-            for _, r in pairs(data.Records or data) do
-                if type(r) == "table" then
-                    local uid  = tostring(r.Uid or "")
-                    local name = r.AssetCategory or r.Category
-                    if name and not (IGNORE_FIRST_AREA and uid:find("FirstArea")) then
-                        local k = norm(name)
-                        local zone = r.AreaId and tostring(r.AreaId) or ZONE_OF[k]
-                        if zone and not isRare(k) then
-                            byZone[zone] = byZone[zone] or {}
-                            local e = byZone[zone][k]
-                            if not e then
-                                e = { name = pretty(name), count = 0 }
-                                byZone[zone][k] = e
-                            end
-                            e.count += 1
-                        end
-                    end
-                end
-            end
-        end
-    end
-
-    -- zones in your order first, then any unexpected zone names
-    local order, used = {}, {}
-    for _, z in ipairs(ZONE_ORDER) do order[#order + 1] = z; used[z] = true end
-    local extra = {}
-    for z in pairs(byZone) do if not used[z] then extra[#extra + 1] = z end end
-    table.sort(extra)
-    for _, z in ipairs(extra) do order[#order + 1] = z end
-
-    local zones, total, sig = {}, 0, {}
-    for _, z in ipairs(order) do
-        local map = byZone[z]
-        if map then
-            local list = {}
-            for _, e in pairs(map) do
-                list[#list + 1] = e
-                total += 1
-                sig[#sig + 1] = z .. ":" .. e.name .. ":" .. e.count
-            end
-            table.sort(list, function(a, b) return a.name < b.name end)
-            if #list > 0 then
-                zones[#zones + 1] = { name = z, eggs = list }
-            end
-        end
-    end
-    table.sort(sig)
-    return zones, total, table.concat(sig, "|")
-end
-
-local function sendStatus(zones, total)
-    local fields = {}
-    local blank = { name = "\u{200B}", value = "\u{200B}", inline = true }
-
-    for i, z in ipairs(zones) do
-        local lines = {}
-        for _, e in ipairs(z.eggs) do
-            lines[#lines + 1] = "🟢 " .. e.name
-                .. (e.count > 1 and (" x" .. e.count) or "")
-                .. ""
-        end
-        local value = table.concat(lines, "\n")
-        if #value > 1024 then value = value:sub(1, 1020) .. "…" end
-        fields[#fields + 1] = { name = "[" .. z.name .. "]", value = value, inline = true }
-        if i % 2 == 0 then fields[#fields + 1] = blank end -- 2 columns
-    end
-    if #zones % 2 == 1 then -- finish the last row so the rarity row starts fresh
-        fields[#fields + 1] = blank
-        fields[#fields + 1] = blank
-    end
-
-    for _, tier in ipairs({ "Secret", "Eternal", "Divine" }) do
-        local link = CHANNEL_LINKS[tier]
-        local value = (type(link) == "string" and link:find("^https?://"))
-            and ("[View alerts](" .. link .. ")") or "—"
-        fields[#fields + 1] = { name = "[" .. tier .. "]", value = value, inline = true }
-    end
 
     local now = os.time()
-    postWebhook(WEBHOOKS.Status, {
-        username   = STATUS_BOT_NAME,
-        avatar_url = (STATUS_BOT_AVATAR ~= "") and STATUS_BOT_AVATAR or nil,
-        embeds = {{
-            title       = "🥚 Egg Status",
-            description = string.format("🟢 **%d ON**  ·  updated <t:%d:R>", total, now),
-            color  = 0x2ECC71,
-            fields = fields,
-            footer = { text = "https://discord.gg/Hk7QN5un5k" },
-            timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ", now),
-        }},
-    })
+
+
+    -- Get this egg's image.
+    local imageUrl = EGG_IMAGES[eggName]
+
+
+    -- Get this egg's value.
+    local eggValue = EGG_VALUES[eggName]
+
+
+    if not eggValue or eggValue == "" then
+        eggValue = "VALUE NOT SET"
+    end
+
+
+    -- Only add thumbnail if an actual URL exists.
+    local thumbnail = nil
+
+    if imageUrl
+        and imageUrl ~= ""
+        and imageUrl ~= "link here" then
+
+        thumbnail = {
+            url = imageUrl
+        }
+
+    end
+
+
+    local embed = {
+
+        title =
+            style.emoji
+            .. "  "
+            .. style.title
+            .. "  "
+            .. style.emoji,
+
+
+        description =
+            "*"
+            .. style.tag
+            .. "*",
+
+
+        color = style.color,
+
+
+        fields = {
+
+            {
+                name = "🥚 Egg",
+                value = "**" .. name .. "**",
+                inline = true
+            },
+
+
+            {
+                name = "💎 Rarity",
+                value = "**" .. tier .. "**",
+                inline = true
+            },
+
+
+            {
+                name = "⏱️ Time Lapsed",
+                value = "**<t:" .. now .. ":R>**",
+                inline = true
+            },
+
+
+            {
+                name = "💰 EGG VALUE",
+                value = "```" .. eggValue .. "```",
+                inline = false
+            },
+
+        },
+
+
+        footer = {
+            text =
+                "https://discord.gg/Hk7QN5un5k • "
+                .. tier
+                .. " Alert"
+        },
+
+
+        timestamp =
+            os.date(
+                "!%Y-%m-%dT%H:%M:%SZ",
+                now
+            ),
+
+    }
+
+
+    -- Add the image only when one exists.
+    if thumbnail then
+        embed.thumbnail = thumbnail
+    end
+
+
+    postWebhook(
+        WEBHOOKS[tier],
+        {
+
+            username = BOT_NAME,
+
+            avatar_url =
+                (BOT_AVATAR ~= "")
+                and BOT_AVATAR
+                or nil,
+
+
+            content =
+                mention
+                .. " "
+                .. style.emoji
+                .. " **"
+                .. name
+                .. "** just spawned!",
+
+
+            allowed_mentions = {
+                parse = {
+                    "roles"
+                }
+            },
+
+
+            embeds = {
+                embed
+            },
+
+        }
+    )
+
 end
+
+
+-- ============================================================
+--  LISTEN FOR RARE EGG SPAWNS
+-- ============================================================
+
+local lastSeen = {}
+
+
+TextChatService.MessageReceived:Connect(function(msg)
+
+    if msg.TextSource then
+        return
+    end
+
+
+    local clean =
+        stripTags(msg.Text)
+
+
+    local eggName, tier =
+        parseEggMessage(clean)
+
+
+    if not eggName then
+        return
+    end
+
+
+    local last =
+        lastSeen[eggName]
+
+
+    if last
+        and os.clock() - last < COOLDOWN then
+
+        return
+
+    end
+
+
+    lastSeen[eggName] = os.clock()
+
+
+    sendEggEmbed(
+        eggName,
+        tier
+    )
+
+end)
+
+
+-- ============================================================
+--  TEST MODE
+-- ============================================================
+
+if TEST_MODE then
+
+    task.spawn(function()
+
+        task.wait(1)
+
+        sendEggEmbed(
+            "unicorn",
+            "Divine"
+        )
+
+
+        task.wait(1)
+
+        sendEggEmbed(
+            "gorilla king",
+            "Eternal"
+        )
+
+
+        task.wait(1)
+
+        sendEggEmbed(
+            "razorfang",
+            "Secret"
+        )
+
+    end)
+
+end
+
+
+-- ============================================================
+--  PART 2: EGG STATUS
+-- ============================================================
+
+
+local RARE = {}
+
+
+for _, list in ipairs({
+    SECRETS,
+    ETERNALS,
+    DIVINES
+}) do
+
+    for _, n in ipairs(list) do
+
+        RARE[norm(n)] = true
+
+    end
+
+end
+
+
+local function isRare(k)
+
+    for r in pairs(RARE) do
+
+        if k:find(r, 1, true) then
+            return true
+        end
+
+    end
+
+    return false
+
+end
+
+
+-- ============================================================
+--  ZONE ORDER
+-- ============================================================
+
+local ZONE_ORDER = {
+
+    "Forest",
+    "Lake",
+    "Desert",
+    "Jungle",
+    "Snow",
+    "Volcano",
+    "Abyss Ocean",
+    "Prehistoric",
+    "Cosmic",
+    "Cherry Blossom",
+    "Titan Temple",
+    "Light Dark"
+
+}
+
+
+-- ============================================================
+--  FALLBACK ZONES
+-- ============================================================
+
+local ZONE_OF = {}
+
+
+for zone, names in pairs({
+
+    ["Forest"] = {
+        "Dog",
+        "Chicken",
+        "Raccoon"
+    },
+
+
+    ["Lake"] = {
+        "Swan",
+        "Trulimero Trulicina",
+        "Duckling",
+        "Catfish"
+    },
+
+
+    ["Desert"] = {
+        "FennecFox",
+        "Tob Tobi Tob Tob",
+        "Jerboa"
+    },
+
+
+    ["Jungle"] = {
+        "Chimpanzee",
+        "Toucan",
+        "Spider"
+    },
+
+
+    ["Snow"] = {
+        "Sabertooth Tiger",
+        "Walrus",
+        "Polar Bear"
+    },
+
+
+    ["Volcano"] = {
+        "Lava frog",
+        "Lava Iguana",
+        "Chillin Chilli",
+        "Ash Gecko"
+    },
+
+
+    ["Abyss Ocean"] = {
+        "Parrotfish",
+        "Orca",
+        "Swordfish"
+    },
+
+
+    ["Prehistoric"] = {
+        "Dodo",
+        "Pterodactyl",
+        "Bronto",
+        "Ankylosaurus"
+    },
+
+
+    ["Cosmic"] = {
+        "La Vacca Saturno Saturnita",
+        "Cyclops Gorilla",
+        "Centapede",
+        "Galaxy Gecko"
+    },
+
+
+    ["Cherry Blossom"] = {
+        "Red Panda",
+        "Salamander",
+        "Crane",
+        "Snowy Owl"
+    },
+
+
+    ["Titan Temple"] = {
+        "Crab",
+        "Rhino",
+        "Mantis"
+    },
+
+
+    ["Light Dark"] = {
+        "Flame Sprite",
+        "Toro"
+    },
+
+}) do
+
+    for _, n in ipairs(names) do
+        ZONE_OF[norm(n)] = zone
+    end
+
+end
+
+
+-- ============================================================
+--  BUILD STATUS
+-- ============================================================
+
+local function buildStatus()
+
+    local byZone = {}
+
+
+    local ok, es =
+        pcall(function()
+
+            return require(
+                RS.Client.EggState
+            )
+
+        end)
+
+
+    if ok and es then
+
+        local ok2, data =
+            pcall(
+                es.ReadFieldEggs
+            )
+
+
+        if ok2
+            and type(data) == "table" then
+
+
+            for _, r in pairs(
+                data.Records or data
+            ) do
+
+
+                if type(r) == "table" then
+
+
+                    local uid =
+                        tostring(
+                            r.Uid or ""
+                        )
+
+
+                    local name =
+                        r.AssetCategory
+                        or r.Category
+
+
+                    if name
+                        and not (
+                            IGNORE_FIRST_AREA
+                            and uid:find("FirstArea")
+                        ) then
+
+
+                        local k =
+                            norm(name)
+
+
+                        local zone =
+                            r.AreaId
+                            and tostring(r.AreaId)
+                            or ZONE_OF[k]
+
+
+                        if zone
+                            and not isRare(k) then
+
+
+                            byZone[zone] =
+                                byZone[zone]
+                                or {}
+
+
+                            local e =
+                                byZone[zone][k]
+
+
+                            if not e then
+
+                                e = {
+                                    name = pretty(name),
+                                    count = 0
+                                }
+
+
+                                byZone[zone][k] =
+                                    e
+
+                            end
+
+
+                            e.count += 1
+
+                        end
+
+                    end
+
+                end
+
+            end
+
+        end
+
+    end
+
+
+    local order = {}
+    local used = {}
+
+
+    for _, z in ipairs(ZONE_ORDER) do
+
+        order[#order + 1] = z
+        used[z] = true
+
+    end
+
+
+    local extra = {}
+
+
+    for z in pairs(byZone) do
+
+        if not used[z] then
+            extra[#extra + 1] = z
+        end
+
+    end
+
+
+    table.sort(extra)
+
+
+    for _, z in ipairs(extra) do
+        order[#order + 1] = z
+    end
+
+
+    local zones = {}
+    local total = 0
+    local sig = {}
+
+
+    for _, z in ipairs(order) do
+
+        local map =
+            byZone[z]
+
+
+        if map then
+
+            local list = {}
+
+
+            for _, e in pairs(map) do
+
+                list[#list + 1] = e
+
+                total += 1
+
+                sig[#sig + 1] =
+                    z
+                    .. ":"
+                    .. e.name
+                    .. ":"
+                    .. e.count
+
+            end
+
+
+            table.sort(
+                list,
+                function(a, b)
+                    return a.name < b.name
+                end
+            )
+
+
+            if #list > 0 then
+
+                zones[#zones + 1] = {
+                    name = z,
+                    eggs = list
+                }
+
+            end
+
+        end
+
+    end
+
+
+    table.sort(sig)
+
+
+    return
+        zones,
+        total,
+        table.concat(sig, "|")
+
+end
+
+
+-- ============================================================
+--  SEND STATUS
+-- ============================================================
+
+local function sendStatus(zones, total)
+
+    local fields = {}
+
+
+    local blank = {
+        name = "\u{200B}",
+        value = "\u{200B}",
+        inline = true
+    }
+
+
+    for i, z in ipairs(zones) do
+
+        local lines = {}
+
+
+        for _, e in ipairs(z.eggs) do
+
+            lines[#lines + 1] =
+                "🟢 "
+                .. e.name
+                .. (
+                    e.count > 1
+                    and (" x" .. e.count)
+                    or ""
+                )
+
+        end
+
+
+        local value =
+            table.concat(
+                lines,
+                "\n"
+            )
+
+
+        if #value > 1024 then
+
+            value =
+                value:sub(1, 1020)
+                .. "…"
+
+        end
+
+
+        fields[#fields + 1] = {
+
+            name = "[" .. z.name .. "]",
+
+            value = value,
+
+            inline = true
+
+        }
+
+
+        if i % 2 == 0 then
+            fields[#fields + 1] = blank
+        end
+
+    end
+
+
+    if #zones % 2 == 1 then
+
+        fields[#fields + 1] = blank
+        fields[#fields + 1] = blank
+
+    end
+
+
+    -- Rarity alert links
+
+    for _, tier in ipairs({
+        "Secret",
+        "Eternal",
+        "Divine"
+    }) do
+
+
+        local link =
+            CHANNEL_LINKS[tier]
+
+
+        local value =
+            (
+                type(link) == "string"
+                and link:find("^https?://")
+            )
+            and (
+                "[View alerts]("
+                .. link
+                .. ")"
+            )
+            or "—"
+
+
+        fields[#fields + 1] = {
+
+            name =
+                "["
+                .. tier
+                .. "]",
+
+            value = value,
+
+            inline = true
+
+        }
+
+    end
+
+
+    local now = os.time()
+
+
+    postWebhook(
+        WEBHOOKS.Status,
+        {
+
+            username =
+                STATUS_BOT_NAME,
+
+
+            avatar_url =
+                (STATUS_BOT_AVATAR ~= "")
+                and STATUS_BOT_AVATAR
+                or nil,
+
+
+            embeds = {{
+
+                title =
+                    "🥚 Egg Status",
+
+
+                description =
+                    string.format(
+                        "🟢 **%d ON**  ·  updated <t:%d:R>",
+                        total,
+                        now
+                    ),
+
+
+                color =
+                    0x2ECC71,
+
+
+                fields =
+                    fields,
+
+
+                footer = {
+                    text =
+                        "https://discord.gg/Hk7QN5un5k"
+                },
+
+
+                timestamp =
+                    os.date(
+                        "!%Y-%m-%dT%H:%M:%SZ",
+                        now
+                    ),
+
+            }},
+
+        }
+    )
+
+end
+
 
 -- ============================================================
 --  STATUS LOOP
 -- ============================================================
+
 local lastSeenSig = nil
 local lastSentSig = nil
 local changedAt   = nil
 
+
 task.spawn(function()
+
     while true do
+
         pcall(function()
-            local zones, total, sig = buildStatus()
+
+
+            local zones, total, sig =
+                buildStatus()
+
 
             if sig ~= lastSeenSig then
+
                 lastSeenSig = sig
-                changedAt = os.clock()
-                print("[EGG STATUS] change detected, sending in " .. SEND_DELAY .. "s")
+
+                changedAt =
+                    os.clock()
+
+
+                print(
+                    "[EGG STATUS] change detected, sending in "
+                    .. SEND_DELAY
+                    .. "s"
+                )
+
             end
 
-            if changedAt and (os.clock() - changedAt) >= SEND_DELAY then
+
+            if changedAt
+                and (
+                    os.clock()
+                    - changedAt
+                ) >= SEND_DELAY then
+
+
                 changedAt = nil
+
+
                 if sig ~= lastSentSig then
+
                     lastSentSig = sig
-                    sendStatus(zones, total)
-                    print(string.format("[EGG STATUS] sent (%d ON)", total))
+
+
+                    sendStatus(
+                        zones,
+                        total
+                    )
+
+
+                    print(
+                        string.format(
+                            "[EGG STATUS] sent (%d ON)",
+                            total
+                        )
+                    )
+
                 end
+
             end
+
         end)
-        task.wait(CHECK_INTERVAL)
+
+
+        task.wait(
+            CHECK_INTERVAL
+        )
+
     end
+
 end)
+
 
 print("[EGG] running!")
