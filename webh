@@ -33,7 +33,7 @@ local COOLDOWN  = 10
 
 local SECRETS = {
     "razorfang","gargoyle","centaur","pure jellyfish","mutant shark",
-    "cosmic skeleton","cosmic dragon","cerberus","kraken","Yeti","tralaledon","trex",
+    "cosmic skeleton boss","cosmic dragon","cerberus","kraken","Yeti","tralaledon","trex",
 }
 local ETERNALS = {
     "skeleton horse","pegasus","oni tiger","gorilla king","ice dragon",
