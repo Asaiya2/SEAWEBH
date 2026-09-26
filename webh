@@ -17,21 +17,20 @@ print("Running egg script")
 -- ===================== WEBHOOKS =====================
 
 local WEBHOOKS = {
-    Status  = "https://discord.com/api/webhooks/1553382833727213599/qwc2_4R0bSMq5noVaRUPH_JIFv3pFuHFyPU6kvfLxzEFKOb3GgNQZmp1zla6zM-kJxct",
-    Secret  = "https://discord.com/api/webhooks/1553382889205268511/Ozhq_O_TWHMyb_n06QJAoGu9T2CZ96Ch8Qs0FZX13Q-ABkiPeu2OvgovpNJ2D6LkbIkd",
-    Eternal = "https://discord.com/api/webhooks/1553382938035363940/Sv5pK9haNEAFeV8WesY-Fkp9c3DvKqA5nzMgEXZcspl7VnOdFcElNEEXFINEmpKW9803",
-    Divine  = "https://discord.com/api/webhooks/1553383377032450089/QaoJzX3x9CZPPPuPhHMv0rPImD1iQCw8CiFYuobOWupWFXKm8BiZY1vWOi02NGVjZak9",
+    Status  = "https://discord.com/api/webhooks/1552793976283594932/PNbVep-6OGxtu71k9vFSCasFnY3gfMhvOb4y58mJwfKDNTgnITCBfeV_0Bvo4GuNMTEp",
+    Secret  = "https://discord.com/api/webhooks/1552833728403865651/hmgHAJBFIOBTqsZMaKpriPZPdWXA7y3MFO1PrYOA9K3U0tmRDkTVHG5j6fBDEtcS88iF",   -- Secret channel webhook
+    Eternal = "https://discord.com/api/webhooks/1552833824621076490/Eu_k7dNhQvKeId010XbRGoRVhDzQKaAk0budtH_f5CnmlsXKXueLqlGGjRR5VrbpXN7-",  -- Eternal channel webhook
+    Divine  = "https://discord.com/api/webhooks/1552833856519012454/I9Lb-MvPv_NND4nvxYFlhRWTG9rYOVDiS6NS_lQy_8884fYpa3x91uTRbT7Ovg13m1xo",   -- Divine channel webhook
 }
 
 
 -- ===================== CHANNEL LINKS =====================
 
 local CHANNEL_LINKS = {
-    Secret  = "https://discord.com/channels/1553382455266779218/1553382455917023277",
-    Eternal = "https://discord.com/channels/1553382455266779218/1553382455917023278",
-    Divine  = "https://discord.com/channels/1553382455266779218/1553382455917023279",
+    Secret  = "https://discord.com/channels/1552339582853324942/1552833273162367016", -- Secret channel
+    Eternal = "https://discord.com/channels/1552339582853324942/1552833300660494436", -- Eternal channel
+    Divine  = "https://discord.com/channels/1552339582853324942/1552833314484920363", -- Divine channel
 }
-
 
 -- ===================== STATUS SETTINGS =====================
 
