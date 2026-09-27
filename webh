@@ -183,7 +183,7 @@ local EGG_VALUES = {
     ["el maja"] = "130M/s",
     ["phoenix"] = "85M/s",
     ["lava dragon"] = "100M/s",
-    ["eternal lunar dragon"] = "Shit man i don't know, never had this before",
+    ["eternal lunar dragon"] = "250M/s",
 
 
     -- ==================== SECRET ====================
