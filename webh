@@ -106,7 +106,7 @@ local EGG_IMAGES = {
 
     ["kitsune"] = "https://asaiya2.github.io/steal-an-egg/Kitsune.png",
 
-    ["nightflame"] = "https://asaiya2.github.io/steal-an-egg/Nightflame.png",
+    ["nightflame"] = "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRy9C2FGThop-RuHvVFOjnarICmUHNj1ShdivFGdmA7jA&s=10",
 
     ["world burner"] = "https://asaiya2.github.io/steal-an-egg/World_Burner.png",
 
