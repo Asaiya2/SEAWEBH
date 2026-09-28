@@ -225,7 +225,7 @@ local DIVINES = {
 
 local EGG_IMAGES = {
     ["kitsune"]      = "https://asaiya2.github.io/steal-an-egg/Kitsune.png",
-    ["nightflame"]   = "https://asaiya2.github.io/steal-an-egg/Nightflame.png",
+    ["nightflame"]   = "https://stealanegg-wiki.com/images/optimized/e99d6b41b772cf59-500.webp",
     ["world burner"] = "https://asaiya2.github.io/steal-an-egg/World_Burner.png",
     ["archangel"]    = "https://asaiya2.github.io/steal-an-egg/ArchAngel.png",
     ["unicorn"]      = "https://asaiya2.github.io/steal-an-egg/Unicorn.png",
