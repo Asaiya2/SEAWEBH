@@ -231,7 +231,7 @@ local STYLE = {
         color = 0x9B59B6,
         emoji = "♾️",
         title = "ETERNAL EGG SPAWNED",
-        tag = "An Endless Egg has awakened!"
+        tag = "An Immortal Egg has awakened!"
     },
 
     Divine = {
