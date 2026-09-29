@@ -4,14 +4,16 @@ print("Running egg script")
 -- ============================================================
 
 -- ===================== WEBHOOKS =====================
--- Keep your own webhook URLs here.
+-- PASTE YOUR NEW (recreated) WEBHOOK URLS HERE.
+-- The old ones were posted publicly, so delete them in Discord and make new ones.
 local WEBHOOKS = {
     Secret  = "https://discord.com/api/webhooks/1552833728403865651/hmgHAJBFIOBTqsZMaKpriPZPdWXA7y3MFO1PrYOA9K3U0tmRDkTVHG5j6fBDEtcS88iF",
     Eternal = "https://discord.com/api/webhooks/1552833824621076490/Eu_k7dNhQvKeId010XbRGoRVhDzQKaAk0budtH_f5CnmlsXKXueLqlGGjRR5VrbpXN7-",
     Divine  = "https://discord.com/api/webhooks/1552833856519012454/I9Lb-MvPv_NND4nvxYFlhRWTG9rYOVDiS6NS_lQy_8884fYpa3x91uTRbT7Ovg13m1xo",
 }
 
-local FEED_WEBHOOK = "https://discord.com/api/webhooks/1554004883353632790/pveRQ_8LBUr5Tlxj34EBtO7Ruua8mvfIACa5QfvhgoUhc6rUw2hgI2VYDltxzmzmznx_"
+-- Webhook of your PRIVATE feed channel (the one you ran !egginput in)
+local FEED_WEBHOOK = "https://discord.com/api/webhooks/1553956714372534272/qJ-MVfidav8Blsn9EZl38fRgQt2SmSj6t157yhlkj4r1kdzMyGSnC2kkhAWHvEyQ8Mzs"
 
 -- ===================== SETTINGS =====================
 
@@ -35,6 +37,8 @@ local CYCLE_NEW_EGGS  = 4    -- this many new eggs appearing = a new cycle start
 local CYCLE_REF_SECS  = 10   -- how old the comparison snapshot may get
 local CYCLE_MIN_GAP   = 60   -- ignore further changes for this long after a detection
 
+-- Set to true to print every egg's raw category / resolved name to the console.
+-- Turn this on while Dr Scramble eggs are spawned to see their exact names.
 local DEBUG_PRINT = false
 
 local TEST_MODE = false
@@ -196,6 +200,16 @@ local EGG_NAMES = {
         ["Skeleton Horse"] = "skeleton horse",
         ["World Burner"]   = "world burner",
     },
+
+    -- Dr Scramble event zone.
+    -- NOTE: the banner is now read straight from the GUI (see readScramble below),
+    -- so this block is only a leftover guess at field-egg names. Safe to keep or delete.
+    ["Dr Scramble"] = {
+        ["Biohazard"]    = { "biohazard", "biohazard egg", "biohazard pet", "biohazard pets" },
+        ["Experimental"] = { "experimental", "experimental egg", "experimental pet", "experimental pets",
+                             "experiment", "experiment egg" },
+        ["Unstable DNA"] = { "unstable dna", "unstable", "unstable egg", "unstable dna egg" },
+    },
 }
 
 
@@ -225,7 +239,7 @@ local DIVINES = {
 
 local EGG_IMAGES = {
     ["kitsune"]      = "https://asaiya2.github.io/steal-an-egg/Kitsune.png",
-    ["nightflame"]   = "https://stealanegg-wiki.com/images/optimized/e99d6b41b772cf59-500.webp",
+    ["nightflame"]   = "https://asaiya2.github.io/steal-an-egg/Nightflame.png",
     ["world burner"] = "https://asaiya2.github.io/steal-an-egg/World_Burner.png",
     ["archangel"]    = "https://asaiya2.github.io/steal-an-egg/ArchAngel.png",
     ["unicorn"]      = "https://asaiya2.github.io/steal-an-egg/Unicorn.png",
@@ -325,6 +339,7 @@ local BOT_AVATAR = "https://t3.ftcdn.net/jpg/03/56/50/38/360_F_356503809_vas1u5o
 local HttpService     = game:GetService("HttpService")
 local TextChatService = game:GetService("TextChatService")
 local RS              = game:GetService("ReplicatedStorage")
+local Players         = game:GetService("Players")
 
 local Assets = nil
 local Areas = nil
@@ -621,6 +636,9 @@ end
 -- PART 2: BOT FEED
 -- ============================================================
 
+-- NOTE: "Dr Scramble" (and Angels/Demons) are intentionally NOT in this list.
+-- The settle check expects EGGS_PER_ZONE eggs in every zone listed here, and
+-- event zones are not always populated.
 local NORMAL_ZONES = {
     "Forest", "Lake", "Desert", "Jungle", "Snow", "Volcano",
     "Abyss Ocean", "Prehistoric", "Cosmic", "Cherry Blossom", "Titan Temple",
@@ -797,6 +815,61 @@ local function buildSnapshot()
 end
 
 
+-- ============================================================
+-- DR. SCRAMBLE BANNER READER
+-- Reads the current banner from the game's own GUI:
+--   PlayerGui.DrScrambleTradeIn.DrScrambleTradeInMain.CurrentEggInfoHolder.EggName
+-- Returns: name ("Experimental Pets"), secondsLeft (or nil)
+-- ============================================================
+
+local function cleanText(s)
+    local r = tostring(s):gsub("<[^>]->", "")
+    r = r:gsub("^%s+", ""):gsub("%s+$", "")
+    return r
+end
+
+local function readScramble()
+    local pg = Players.LocalPlayer and Players.LocalPlayer:FindFirstChild("PlayerGui")
+    local gui = pg and pg:FindFirstChild("DrScrambleTradeIn")
+    local main = gui and gui:FindFirstChild("DrScrambleTradeInMain")
+    local holder = main and main:FindFirstChild("CurrentEggInfoHolder")
+    if not holder then
+        return nil
+    end
+
+    local nameLabel = holder:FindFirstChild("EggName")
+    if not (nameLabel and nameLabel:IsA("TextLabel")) then
+        return nil
+    end
+
+    -- "Experimental Pets Banner" -> "Experimental Pets"
+    local name = cleanText(nameLabel.Text)
+    name = name:gsub("%s*Banner%s*$", "")
+    if name == "" then
+        return nil
+    end
+
+    -- optional: "Rotates in: 50m 42s" -> seconds
+    local left = nil
+    for _, obj in ipairs(holder:GetDescendants()) do
+        if obj:IsA("TextLabel") then
+            local t = cleanText(obj.Text)
+            if t:lower():find("rotates in") then
+                local h = tonumber(t:match("(%d+)%s*h")) or 0
+                local m = tonumber(t:match("(%d+)%s*m")) or 0
+                local s = tonumber(t:match("(%d+)%s*s")) or 0
+                if h + m + s > 0 then
+                    left = h * 3600 + m * 60 + s
+                end
+                break
+            end
+        end
+    end
+
+    return name, left
+end
+
+
 -- cycleAge = seconds since the current egg cycle started (nil until a cycle
 -- has been seen). The bot uses it for the "Next update" countdown.
 local function sendFeed(counts, cycleAge)
@@ -808,6 +881,15 @@ local function sendFeed(counts, cycleAge)
 
     if cycleAge then
         data._age = cycleAge
+    end
+
+    -- Dr. Scramble current banner (optional, skipped if the GUI isn't found)
+    local okS, scrambleName, scrambleLeft = pcall(readScramble)
+    if okS and scrambleName then
+        data._scramble = scrambleName
+        if scrambleLeft then
+            data._scramble_left = scrambleLeft
+        end
     end
 
     local body = "EGGDATA" .. HttpService:JSONEncode(data)
@@ -991,6 +1073,13 @@ task.spawn(function()
 
             local shown = latchActive and latched or live
             local sig   = signature(shown)
+
+            -- Include the Dr. Scramble banner in the signature so a banner
+            -- change is sent right away instead of waiting for the heartbeat.
+            local okB, bannerName = pcall(readScramble)
+            if okB and bannerName then
+                sig = sig .. "|scramble:" .. bannerName
+            end
 
             local changed = sig ~= lastSig
             local beat    = (now - lastSentAt) >= HEARTBEAT
