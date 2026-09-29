@@ -13,7 +13,7 @@ local WEBHOOKS = {
 }
 
 -- Webhook of your PRIVATE feed channel (the one you ran !egginput in)
-local FEED_WEBHOOK = "https://discord.com/api/webhooks/1553956714372534272/qJ-MVfidav8Blsn9EZl38fRgQt2SmSj6t157yhlkj4r1kdzMyGSnC2kkhAWHvEyQ8Mzs"
+local FEED_WEBHOOK = "https://discord.com/api/webhooks/1554004883353632790/pveRQ_8LBUr5Tlxj34EBtO7Ruua8mvfIACa5QfvhgoUhc6rUw2hgI2VYDltxzmzmznx_"
 
 -- ===================== SETTINGS =====================
 
