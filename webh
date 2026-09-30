@@ -9,9 +9,9 @@ print("Running egg script")
 -- PASTE YOUR NEW (recreated) WEBHOOK URLS HERE.
 -- The old ones were posted publicly, so delete them in Discord and make new ones.
 local WEBHOOKS = {
-    Secret  = "https://discord.com/api/webhooks/1552833728403865651/hmgHAJBFIOBTqsZMaKpriPZPdWXA7y3MFO1PrYOA9K3U0tmRDkTVHG5j6fBDEtcS88iF",
-    Eternal = "https://discord.com/api/webhooks/1552833824621076490/Eu_k7dNhQvKeId010XbRGoRVhDzQKaAk0budtH_f5CnmlsXKXueLqlGGjRR5VrbpXN7-",
-    Divine  = "https://discord.com/api/webhooks/1552833856519012454/I9Lb-MvPv_NND4nvxYFlhRWTG9rYOVDiS6NS_lQy_8884fYpa3x91uTRbT7Ovg13m1xo",
+    Secret  = "https://discord.com/api/webhooks/1553958684038668291/zhRdTi4NcUoOKsWNtxLnIMbDDy6sknj8RNn-udZpHebF5e4oi7jnTIy6Yn4KCiQ1pcHA",
+    Eternal = "https://discord.com/api/webhooks/1553958775139074049/pvQpQWqIinQL6XxDI4N1WWM2vTKeMyZMBsTqPRwqgMG_EziI3poEXzUNs6dzjhLdFmoN",
+    Divine  = "https://discord.com/api/webhooks/1553958825797881916/LVR5znVyEuI7UwKjUgRN0pyDRv810wCTgK2-dKj9XVZrXt69qscQLYFASyNY0HCrTsp2",
 }
 
 -- Webhook of your PRIVATE feed channel (the one you ran !egginput in)
@@ -47,6 +47,7 @@ local ALERT_EXISTING_ON_START = true   -- true: rare eggs already in the game wh
 local ALERT_FORGET_SECONDS    = 900    -- forget an egg this long after it disappears (so a flicker doesn't re-alert)
 local ALERT_SEND_GAP          = 0.3    -- seconds between alerts, to stay under Discord's webhook rate limit
 local SHOW_LOCATION           = true   -- adds the zone (Forest, Cosmic...) to the alert
+local ALERT_COOLDOWN          = 240    -- seconds before the SAME egg can be alerted again (survives re-executing / rejoining)
 
 -- Set to true to print every egg's raw category / resolved name to the console.
 -- Turn this on while Dr Scramble eggs are spawned to see their exact names.
@@ -824,6 +825,64 @@ end
 -- alert is sent immediately.
 -- ============================================================
 
+-- ---------- alert cooldown (saved to a file so it survives re-executing) ----------
+local COOLDOWN_FILE = "egg_alert_cooldown.json"
+local lastSent      = {}   -- egg name -> os.time() of its last alert
+local sentThisScan  = {}   -- egg names alerted during the current scan
+
+local canSave = type(writefile) == "function"
+    and type(readfile) == "function"
+    and type(isfile) == "function"
+
+if canSave then
+    pcall(function()
+        if isfile(COOLDOWN_FILE) then
+            local data = HttpService:JSONDecode(readfile(COOLDOWN_FILE))
+            if type(data) == "table" then
+                for name, t in pairs(data) do
+                    if type(t) == "number" then
+                        lastSent[name] = t
+                    end
+                end
+            end
+        end
+    end)
+else
+    warn("[EGG] This executor has no file functions, so the cooldown resets when you re-execute.")
+end
+
+local function saveCooldowns()
+    if not canSave then return end
+    local t = os.time()
+    for name, at in pairs(lastSent) do
+        if t - at > ALERT_COOLDOWN then
+            lastSent[name] = nil   -- expired, no need to keep it
+        end
+    end
+    pcall(function()
+        writefile(COOLDOWN_FILE, HttpService:JSONEncode(lastSent))
+    end)
+end
+
+local function cooldownAllows(name)
+    if sentThisScan[name] then
+        return true   -- extra copies spotted in the same scan (2 Stags = 2 alerts)
+    end
+
+    local t    = os.time()
+    local last = lastSent[name]
+
+    if last and t - last >= 0 and t - last < ALERT_COOLDOWN then
+        print("[EGG] " .. name .. " skipped (cooldown, " .. (ALERT_COOLDOWN - (t - last)) .. "s left)")
+        return false
+    end
+
+    lastSent[name]     = t
+    sentThisScan[name] = true
+    saveCooldowns()
+    return true
+end
+
 local alertQueue = {}
 
 task.spawn(function()
@@ -846,6 +905,7 @@ local firstRareScan = true
 local function checkRare(eggs)
     local now = os.clock()
     local noUidNow = {}
+    sentThisScan = {}
 
     for _, e in ipairs(eggs) do
         local info = RARE_INFO[e.k] or RARE_INFO[e.nameKey] or RARE_INFO[e.catKey]
@@ -869,7 +929,7 @@ local function checkRare(eggs)
                 end
             end
 
-            if isNew and (ALERT_EXISTING_ON_START or not firstRareScan) then
+            if isNew and (ALERT_EXISTING_ON_START or not firstRareScan) and cooldownAllows(info.name) then
                 local location = ZONE_OF[e.k] or ZONE_OF[e.nameKey] or getAreaDisplayName(e.areaId)
 
                 alertQueue[#alertQueue + 1] = {
