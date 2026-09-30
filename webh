@@ -9,9 +9,9 @@ print("Running egg script")
 -- PASTE YOUR NEW (recreated) WEBHOOK URLS HERE.
 -- The old ones were posted publicly, so delete them in Discord and make new ones.
 local WEBHOOKS = {
-    Secret  = "https://discord.com/api/webhooks/1553958684038668291/zhRdTi4NcUoOKsWNtxLnIMbDDy6sknj8RNn-udZpHebF5e4oi7jnTIy6Yn4KCiQ1pcHA",
-    Eternal = "https://discord.com/api/webhooks/1553958775139074049/pvQpQWqIinQL6XxDI4N1WWM2vTKeMyZMBsTqPRwqgMG_EziI3poEXzUNs6dzjhLdFmoN",
-    Divine  = "https://discord.com/api/webhooks/1553958825797881916/LVR5znVyEuI7UwKjUgRN0pyDRv810wCTgK2-dKj9XVZrXt69qscQLYFASyNY0HCrTsp2",
+    Secret  = "https://discord.com/api/webhooks/1552833728403865651/hmgHAJBFIOBTqsZMaKpriPZPdWXA7y3MFO1PrYOA9K3U0tmRDkTVHG5j6fBDEtcS88iF",
+    Eternal = "https://discord.com/api/webhooks/1552833824621076490/Eu_k7dNhQvKeId010XbRGoRVhDzQKaAk0budtH_f5CnmlsXKXueLqlGGjRR5VrbpXN7-",
+    Divine  = "https://discord.com/api/webhooks/1552833856519012454/I9Lb-MvPv_NND4nvxYFlhRWTG9rYOVDiS6NS_lQy_8884fYpa3x91uTRbT7Ovg13m1xo",
 }
 
 -- Webhook of your PRIVATE feed channel (the one you ran !egginput in)
