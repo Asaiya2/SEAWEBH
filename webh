@@ -231,7 +231,7 @@ local EGG_NAMES = {
 local SECRETS = {
     "razorfang", "gargoyle", "centaur", "pure jellyfish", "mutant shark",
     "cosmic skeleton", "cosmic dragon", "cerberus", "kraken", "yeti",
-    "tralaledon", "trex",
+    "tralaledon", "trex", "stag",
 }
 
 local ETERNALS = {
