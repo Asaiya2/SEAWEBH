@@ -9,9 +9,9 @@ print("Running egg script")
 -- PASTE YOUR NEW (recreated) WEBHOOK URLS HERE.
 -- The old ones were posted publicly, so delete them in Discord and make new ones.
 local WEBHOOKS = {
-    Secret  = "https://discord.com/api/webhooks/1552833728403865651/hmgHAJBFIOBTqsZMaKpriPZPdWXA7y3MFO1PrYOA9K3U0tmRDkTVHG5j6fBDEtcS88iF",
-    Eternal = "https://discord.com/api/webhooks/1552833824621076490/Eu_k7dNhQvKeId010XbRGoRVhDzQKaAk0budtH_f5CnmlsXKXueLqlGGjRR5VrbpXN7-",
-    Divine  = "https://discord.com/api/webhooks/1552833856519012454/I9Lb-MvPv_NND4nvxYFlhRWTG9rYOVDiS6NS_lQy_8884fYpa3x91uTRbT7Ovg13m1xo",
+    Secret  = "https://discord.com/api/webhooks/1553958684038668291/zhRdTi4NcUoOKsWNtxLnIMbDDy6sknj8RNn-udZpHebF5e4oi7jnTIy6Yn4KCiQ1pcHA",
+    Eternal = "https://discord.com/api/webhooks/1553958775139074049/pvQpQWqIinQL6XxDI4N1WWM2vTKeMyZMBsTqPRwqgMG_EziI3poEXzUNs6dzjhLdFmoN",
+    Divine  = "https://discord.com/api/webhooks/1553958825797881916/LVR5znVyEuI7UwKjUgRN0pyDRv810wCTgK2-dKj9XVZrXt69qscQLYFASyNY0HCrTsp2",
 }
 
 -- Webhook of your PRIVATE feed channel (the one you ran !egginput in)
@@ -339,8 +339,8 @@ local STYLE = {
     Divine  = { color = 0xF1C40F, emoji = "✨", title = "DIVINE EGG SPAWNED", tag = "A Heavenly Egg has descended!" },
 }
 
-local BOT_NAME   = "WORST NOTIFIER"
-local BOT_AVATAR = "https://t3.ftcdn.net/jpg/03/56/50/38/360_F_356503809_vas1u5ohd44mvLFSaNfUthgpWCTJNCD9.jpg"
+local BOT_NAME   = "WORST • Steal An Egg"
+local BOT_AVATAR = "https://github.com/Asaiya2/steal-an-egg/blob/main/neW.png?raw=true"
 
 
 -- ============================================================
@@ -592,7 +592,7 @@ local function sendEggEmbed(eggName, tier, location)
             { name = "💰 EGG VALUE",    value = "```" .. eggValue .. "```",       inline = false },
         },
 
-        footer    = { text = "https://discord.gg/Hk7QN5un5k • " .. tier .. " Alert" },
+        footer    = { text = "https://discord.gg/W0RST • " .. tier .. " Alert" },
         timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ", now),
     }
 
