@@ -1,1195 +1,1604 @@
-print("Running egg script")
--- ============================================================
---  RARE EGG NOTIFIER + BOT FEED
---  Rare egg alerts now come from scanning the game's eggs
---  (same source as the board feed). No chat detection.
--- ============================================================
+"""
+cogs/2egg_status.py  -  live "Available Eggs" boards
 
--- ===================== WEBHOOKS =====================
--- PASTE YOUR NEW (recreated) WEBHOOK URLS HERE.
--- The old ones were posted publicly, so delete them in Discord and make new ones.
-local WEBHOOKS = {
-    Secret  = "https://discord.com/api/webhooks/1552833728403865651/hmgHAJBFIOBTqsZMaKpriPZPdWXA7y3MFO1PrYOA9K3U0tmRDkTVHG5j6fBDEtcS88iF",
-    Eternal = "https://discord.com/api/webhooks/1552833824621076490/Eu_k7dNhQvKeId010XbRGoRVhDzQKaAk0budtH_f5CnmlsXKXueLqlGGjRR5VrbpXN7-",
-    Divine  = "https://discord.com/api/webhooks/1552833856519012454/I9Lb-MvPv_NND4nvxYFlhRWTG9rYOVDiS6NS_lQy_8884fYpa3x91uTRbT7Ovg13m1xo",
-}
+How it works
+  APP --(webhook)--> private #egg-feed channel --(bot reads it)--> edits 13 board messages
 
--- Webhook of your PRIVATE feed channel (the one you ran !egginput in)
-local FEED_WEBHOOK = "https://discord.com/api/webhooks/1554004883353632790/pveRQ_8LBUr5Tlxj34EBtO7Ruua8mvfIACa5QfvhgoUhc6rUw2hgI2VYDltxzmzmznx_"
+Boards (each is its own message; every biome has its own board)
+  1 Forest        4 Jungle       7 Abyss Ocean       10 Cherry Blossom    13 Dr Scramble (always last)
+  2 Lake          5 Snow         8 Prehistoric       11 Titan Temple
+  3 Desert        6 Volcano      9 Cosmic            12 Angels / Demons
 
--- ===================== SETTINGS =====================
+Every board shows a live "Next update" countdown. The APP sends how old the current
+egg cycle is (the "_age" value), and the bot adds REROLL_INTERVAL to get the next reroll time.
 
-local CHECK_INTERVAL    = 0.5
-local MIN_SEND_GAP      = 1
-local HEARTBEAT         = 60
-local IGNORE_FIRST_AREA = false
+The Dr Scramble board shows (Biohazard / Experimental / Unstable DNA). The APP sends
+"_scramble" (banner name). The bot starts its own SCRAMBLE_INTERVAL (1 hour) countdown
+whenever the banner name changes. "_scramble_left" from the APP is ignored.
 
-local LATCH_ENABLED  = true
-local LATCH_SECONDS  = 290
+Board images: edit the BANNERS dict below. Each board has its own line.
 
-local RESET_IF_CHANGED = 10
-local WINDOW_SECONDS   = 3
-local REROLL_LOCKOUT   = 15
+Commands (administrator only)
+  !egginput    run in the private feed channel   -> bot reads egg data from here
+  !eggdisplay  run in the public board channel   -> bot posts the boards and edits them from now on
+  !eggcheck    shows eggs with no emoji + names the game sent that the catalog doesn't know
 
-local EGGS_PER_ZONE  = 5
-local SETTLE_TIMEOUT = 3
+Commands (everyone)
+  !alert <egg>   ping me when the egg is available
+  !value <egg>   value of a Secret / Eternal / Divine egg
+  !mutate        interactive Money/s calculator (button + pop-up + dropdown)
 
--- New-cycle detector (drives the "Next update" countdown on the board)
-local CYCLE_NEW_EGGS  = 4    -- this many new eggs appearing = a new cycle started
-local CYCLE_REF_SECS  = 10   -- how old the comparison snapshot may get
-local CYCLE_MIN_GAP   = 60   -- ignore further changes for this long after a detection
+There is NO !lastseen command. Last Seen is only the automatic persistent board.
+"""
+import asyncio
+import difflib
+import json
+import os
+import re
+import sqlite3
+import time
+from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 
--- ---------- rare egg alerts ----------
--- Every rare egg that exists in the game gets its own alert, the moment a scan
--- (every CHECK_INTERVAL seconds) sees it. Two Stags = two alerts. Each egg is
--- alerted ONCE (tracked by its unique id), not on every scan.
-local ALERT_EXISTING_ON_START = true   -- true: rare eggs already in the game when you run the script are alerted too
-local ALERT_FORGET_SECONDS    = 900    -- forget an egg this long after it disappears (so a flicker doesn't re-alert)
-local ALERT_SEND_GAP          = 0.3    -- seconds between alerts, to stay under Discord's webhook rate limit
-local SHOW_LOCATION           = true   -- adds the zone (Forest, Cosmic...) to the alert
+import discord
+from discord.ext import commands, tasks
 
--- Set to true to print every egg's raw category / resolved name to the console.
--- Turn this on while Dr Scramble eggs are spawned to see their exact names.
-local DEBUG_PRINT = false
+DB_FOLDER = r"C:\Users\Kelly\Desktop\discord database"
+DB_PATH = os.path.join(DB_FOLDER, "egg_board.db")
 
--- Sends 3 sample alerts (Divine / Eternal / Secret) when the script starts.
-local TEST_MODE = false
+FEED_PREFIX = "EGGDATA"   # the APP starts every feed message with this
+OFFLINE_AFTER = 150       # seconds without data before the boards are marked offline
+REROLL_INTERVAL = 300     # seconds between egg rerolls (5 minutes) - change if the game differs
+SCRAMBLE_INTERVAL = 3600  # Dr Scramble banner rotates every hour
+DRIFT_TOLERANCE = 3       # ignore timer estimates that differ by less than this many seconds
 
+# ---------------------------------------------------------------------------
+# LAST SEEN BOARD
+# This is NOT a command. It is an extra persistent board message created
+# automatically when !eggdisplay creates the normal egg boards.
+#
+# Add/remove eggs here to control exactly what appears on the Last Seen board.
+# Eggs are grouped under their normal zone automatically.
+# Example:
+#   "Forest": ["Chicken", "Dog"],
+#
+# The timestamps come from the EggAlerts tracker. You can seed an egg with a
+# The value is the starting age for that egg. Once the live feed sees the egg,
+# its timestamp is replaced by the real appearance time. Discord's
+# <t:TIMESTAMP:R> formatting then keeps "0 seconds ago", "12 minutes ago",
+# "2 days ago", etc. updating by itself without the bot editing every second.
+# ---------------------------------------------------------------------------
+# The hardcoded ages above are measured from this fixed date/time.
+# Change this only when you want to re-base all of the hardcoded ages.
+# Philippines time (UTC+8).
+LAST_SEEN_AS_OF = "2026-09-28 23:00"
+LAST_SEEN_TZ_HOURS = 8
 
--- ============================================================
--- EGG NAMES
--- ============================================================
-
-local EGG_NAMES = {
-    -- VERIFIED INTERNAL NAMES: mappings updated from the game debug output.
-
-    ["Forest"] = {
-        ["Chicken"]         = "chicken",
-        ["Dog"]             = "dog",
-        ["Bird"]            = "desertlark",
-        ["Burrowing Owl"]   = "burrowing owl",
-        ["Raccoon"]         = "raccoon",
-        ["Fox"]             = "mire fox",
-        ["Bear"]            = "bear",
-        ["Brr Brr Patapim"] = "brr brr patapim",
+LAST_SEEN_BOARD = {
+    "Forest": {
+        "Chicken": "8m", "Dog": "15m", "Bird": "1h", "Burrowing Owl": "2h",
+        "Raccoon": "58m", "Fox": "3h", "Bear": "13m", "Brr Brr Patapim": "3h",
     },
-
-    ["Lake"] = {
-        ["Frog"]                = "frog",
-        ["Duckling"]            = "duckling",
-        ["Catfish"]             = "catfish",
-        ["Turtle"]              = "turtle",
-        ["Trulimero Trulicina"] = "trulimero trulicina",
-        ["Swan"]                = "swan",
-        ["Axolotl"]             = "dream axolotl",
-        ["Leviathan"]           = "leviathan",
+    "Lake": {
+        "Frog": "10m", "Duckling": "8m", "Catfish": "1h", "Turtle": "30m",
+        "Trulimero Trulicina": "13m", "Swan": "2h", "Axolotl": "48m", "Leviathan": "13m",
     },
-
-    ["Desert"] = {
-        ["Jerboa"]           = "jerboa",
-        ["Fennec"]           = "fennec",
-        ["FennecFox"]        = "fennec",
-        ["Camel"]            = "camel",
-        ["Tob Tobi Tob Tob"] = "tob tobi tob tob",
-        ["Snake"]            = "snake",
-        ["Sand Spider"]      = "deathstalkerscorpion",
-        ["Scorpion"]         = "scorpion",
-        ["Royal Sphinx"]     = "royal sphinx",
+    "Desert": {
+        "Jerboa": "8m", "Fennec": "8m", "Camel": "8m", "Tob Tobi Tob Tob": "13m",
+        "Snake": "8m", "Sand Spider": "13m", "Scorpion": "8m", "Royal Sphinx": "53m",
     },
-
-    ["Jungle"] = {
-        ["Chimpanzee"]            = "chimpanzee",
-        ["Toucan"]                = "toucan",
-        ["Crocodile"]             = "crocodile",
-        ["Gorilla"]               = "gorilla",
-        ["Orangutini Ananassini"] = "orangutini ananassini",
-        ["Spider"]                = "spider",
-        ["Tiger"]                 = "tiger",
-        ["King Snake"]            = "king snake",
+    "Jungle": {
+        "Chimpanzee": "8m", "Toucan": "8m", "Crocodile": "8m", "Gorilla": "13m",
+        "Orangutini Ananassini": "13m", "Spider": "13m", "Tiger": "1h", "King Snake": "6h",
     },
-
-    ["Snow"] = {
-        ["Penguin"]          = "penguin",
-        ["Walrus"]           = "walrus",
-        ["Polar Bear"]       = "polar bear",
-        ["Sabertooth Tiger"] = "sabertooth tiger",
-        ["Mammoth"]          = "mammoth",
-        ["Colossal Mammoth"] = "colossal mammoth",
-        ["King Mammoth"]     = "king mammoth",
-        ["Yeti"]             = "yeti",
-        ["Ice Dragon"]       = "ice dragon",
+    "Snow": {
+        "Penguin": "13m", "Walrus": "13m", "Polar Bear": "13m", "Sabertooth Tiger": "13m",
+        "Mammoth": "1h", "King Mammoth": "53m", "Yeti": "4h", "Ice Dragon": "12h",
     },
-
-    ["Volcano"] = {
-        ["Lava Gecko"]     = "ash gecko",
-        ["Lava Frog"]      = "lava frog",
-        ["Flaming Bull"]   = "flaming bull",
-        ["Chillin Chilli"] = "chillin chilli",
-        ["Lava Iguana"]    = "lava iguana",
-        ["Cerberus"]       = "cerberus",
-        ["Phoenix"]        = "phoenix",
-        ["Lava Dragon"]    = "lava dragon",
+    "Volcano": {
+        "Lava Gecko": "8m", "Lava Frog": "1m", "Flaming Bull": "18m", "Chillin Chilli": "18m",
+        "Lava Iguana": "8m", "Cerberus": "8m", "Phoenix": "1h", "Lava Dragon": "4h",
     },
-
-    ["Abyss Ocean"] = {
-        ["Parrotfish"]   = "parrotfish",
-        ["Swordfish"]    = "swordfish",
-        ["Shark"]        = "shark",
-        ["Orca"]         = "orca",
-        ["Whale Shark"]  = "whale shark",
-        ["Finned Thresher"] = "finned thresher",
-        ["Beluga Whale"] = "alabaster whale",
-        ["Kraken"]       = "kraken",
-        ["El Maja"]      = "el maja",
+    "Abyss Ocean": {
+        "Parrotfish": "8m", "Swordfish": "8m", "Shark": "8m", "Orca": "8m",
+        "Whale Shark": "8m", "Beluga Whale": "13m", "Kraken": "1h", "El Maja": "1h",
     },
-
-    ["Prehistoric"] = {
-        ["Dodo"]         = "dodo",
-        ["Pterodactyl"]  = "pterodactyl",
-        ["Ankylosaurus"] = "ankylosaurus",
-        ["Bronto"]       = "bronto",
-        ["Triceratops"]  = "triceratops",
-        ["TRex"]         = "trex",
-        ["TyrannosaurusRex"] = "trex",
-        ["Tralaledon"]   = "tralaledon",
-        ["Mosasaurus"]   = "mosasaurus",
+    "Prehistoric": {
+        "Dodo": "8m", "Pterodactyl": "8m", "Ankylosaurus": "8m", "Bronto": "18m",
+        "Triceratops": "13m", "TRex": "1h", "Tralaledon": "8m", "Mosasaurus": "9h",
     },
-
-    ["Cosmic"] = {
-        ["Centapede"]                  = "centapede",
-        ["Cosmic Gecko"]               = "galaxy gecko",
-        ["Cosmic Gorilla"]             = "cosmic gorilla",
-        ["Cyclops Gorilla"]            = "cyclops gorilla",
-        ["La Vacca Saturno Saturnita"] = "la vacca saturno saturnita",
-        ["Cosmic Dragon"]              = "cosmic dragon",
-        ["Cosmic Skeleton"]            = "cosmic skeleton boss",
-        ["Eternal Lunar Dragon"]       = "eternal lunar dragon",
-        ["Unicorn"]                    = "unicorn",
+    "Cosmic": {
+        "Centapede": "33m", "Cosmic Gecko": "1h", "Cosmic Gorilla": "1h",
+        "La Vacca Saturno Saturnita": "1h", "Cosmic Dragon": "1h", "Cosmic Skeleton": "1h",
+        "Eternal Lunar Dragon": "48m", "Unicorn": "2d",
     },
-
-    ["Cherry Blossom"] = {
-        ["Crane"]      = "crane",
-        ["Salamander"] = "salamander",
-        ["Red Panda"]  = "red panda",
-        ["Snowy Owl"]  = "snowy owl",
-        ["Koi"]        = "koi",
-        ["Stag"]       = "stag",
-        ["Oni Tiger"]  = "oni tiger",
-        ["Kitsune"]    = "kitsune",
+    "Cherry Blossom": {
+        "Crane": "8m", "Salamander": "8m", "Red Panda": "8m", "Snowy Owl": "8m",
+        "Koi": "18m", "Stag": "58m", "Oni Tiger": "6h", "Kitsune": "2d",
     },
-
-    ["Titan Temple"] = {
-        ["Spideron"]     = "kaiju spider",
-        ["Crustacia"]    = "crab",
-        ["Bladehide"]    = "blade head",
-        ["Mantaris"]     = "mantaris",
-        ["Rhinotaur"]    = "rhinotaur",
-        ["Rhino"]        = "rhinotaur",
-        ["Mutant Shark"] = "mutant shark",
-        ["Gorilla King"] = "gorilla king",
-        ["Nightflame"]   = "nightflame",
+    "Titan Temple": {
+        "Spideron": "8m", "Crustacia": "8m", "Bladehide": "8m", "Mantaris": "8m",
+        "Rhinotaur": "8m", "Mutant Shark": "13m", "Gorilla King": "1h", "Nightflame": "7h",
     },
-
-    ["Angels"] = {
-        ["Light Dove"]     = "dove",
-        ["Winged Lamb"]    = "winged lamb",
-        ["Sacred Moth"]    = "moth",
-        ["Holy Peacock"]   = "holy peacock",
-        ["Pure Jellyfish"] = "pure jellyfish",
-        ["Centaur"]        = "centaur",
-        ["Pegasus"]        = "pegasus",
-        ["ArchAngel"]      = "archangel",
+    "Angels": {
+        "Light Dove": "8m", "Winged Lamb": "8m", "Sacred Moth": "8m", "Holy Peacock": "33m",
+        "Pure Jellyfish": "8m", "Centaur": "6h", "Pegasus": "7h", "ArchAngel": "5h",
     },
-
-    ["Demons"] = {
-        ["Flame Sprite"]   = "flame sprite",
-        ["Toro"]           = "toro",
-        ["Imp"]            = "imp",
-        ["Demon Hound"]    = "demon hound",
-        ["Gargoyle"]       = "gargoyle",
-        ["RazorFang"]      = "razorfang",
-        ["Skeleton Horse"] = "skeleton horse",
-        ["World Burner"]   = "world burner",
+    "Demons": {
+        "Flame Sprite": "8m", "Toro": "8m", "Imp": "13m", "Demon Hound": "23m",
+        "Gargoyle": "43m", "RazorFang": "43m", "Skeleton Horse": "13h", "World Burner": "4d",
     },
-
-    -- Dr Scramble event zone.
-    -- NOTE: the banner is now read straight from the GUI (see readScramble below),
-    -- so this block is only a leftover guess at field-egg names. Safe to keep or delete.
-    ["Dr Scramble"] = {
-        ["Biohazard"]    = { "biohazard", "biohazard egg", "biohazard pet", "biohazard pets" },
-        ["Experimental"] = { "experimental", "experimental egg", "experimental pet", "experimental pets",
-                             "experiment", "experiment egg" },
-        ["Unstable DNA"] = { "unstable dna", "unstable", "unstable egg", "unstable dna egg" },
+    # Dr Scramble banners. Experimental is left out on purpose: it is the banner
+    # that is live right now, so the feed sets its real time. Add it back here
+    # (e.g. "Experimental": "3h") once you want a seed for when it is not live.
+    "Dr Scramble": {
+        "Biohazard": "2h", "Unstable DNA": "1h",
     },
 }
 
-
--- ============================================================
--- RARE EGG LISTS
--- ============================================================
-
-local SECRETS = {
-    "razorfang", "gargoyle", "centaur", "pure jellyfish", "mutant shark",
-    "cosmic skeleton", "cosmic dragon", "cerberus", "kraken", "yeti",
-    "tralaledon", "trex", "stag",
-}
-
-local ETERNALS = {
-    "skeleton horse", "pegasus", "oni tiger", "gorilla king", "ice dragon",
-    "mosasaurus", "el maja", "phoenix", "lava dragon", "eternal lunar dragon",
-}
-
-local DIVINES = {
-    "world burner", "archangel", "nightflame", "kitsune", "unicorn",
+# Some zones were seeded at a different moment than LAST_SEEN_AS_OF above.
+# Their ages are measured from this date/time instead (same timezone).
+# When you change a Dr Scramble seed, set this to "now" first.
+LAST_SEEN_AS_OF_OVERRIDES = {
+    "Dr Scramble": "2026-09-29 16:20",
 }
 
 
--- ============================================================
--- EGG IMAGES
--- ============================================================
+GREY = 0x95A5A6           # colour of every board while the feed is offline / waiting
 
-local EGG_IMAGES = {
-    ["kitsune"]      = "https://asaiya2.github.io/steal-an-egg/Kitsune.png",
-    ["nightflame"]   = "https://asaiya2.github.io/steal-an-egg/Nightflame.png",
-    ["world burner"] = "https://asaiya2.github.io/steal-an-egg/World_Burner.png",
-    ["archangel"]    = "https://asaiya2.github.io/steal-an-egg/ArchAngel.png",
-    ["unicorn"]      = "https://asaiya2.github.io/steal-an-egg/Unicorn.png",
 
-    ["skeleton horse"]       = "https://asaiya2.github.io/steal-an-egg/Skeleton_horse.png",
-    ["pegasus"]              = "https://asaiya2.github.io/steal-an-egg/Pegasus.png",
-    ["oni tiger"]            = "https://asaiya2.github.io/steal-an-egg/Oni_Tiger.png",
-    ["gorilla king"]         = "https://asaiya2.github.io/steal-an-egg/Gorrila.png",
-    ["ice dragon"]           = "https://asaiya2.github.io/steal-an-egg/Ice_Dragon.png",
-    ["mosasaurus"]           = "https://asaiya2.github.io/steal-an-egg/Mosasaur.png",
-    ["el maja"]              = "https://asaiya2.github.io/steal-an-egg/El_maja.png",
-    ["phoenix"]              = "https://asaiya2.github.io/steal-an-egg/phoenix.png",
-    ["lava dragon"]          = "https://asaiya2.github.io/steal-an-egg/Lava_Dragon.png",
-    ["eternal lunar dragon"] = "https://asaiya2.github.io/steal-an-egg/Lunar_Dragon.png",
+def board_key(zones):
+    """The name used to look up a board's colour / banner / thumbnail.
+    One biome -> its name ("Forest"). Two biomes -> "Angels / Demons"."""
+    return " / ".join(zones)
 
-    ["razorfang"]      = "https://asaiya2.github.io/steal-an-egg/Rock_Demon.png",
-    ["gargoyle"]       = "https://asaiya2.github.io/steal-an-egg/Gargoyle_Demon.png",
-    ["centaur"]        = "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQmpo9iE1MHMQNyB2lCJ6QtI4O_Stz7EvDQXu6HZ2WZTw&s",
-    ["pure jellyfish"] = "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQIXvOauCXxGctW9tMXU6YeSDuNiL8I_RxhFolmuKZy0A&s",
-    ["mutant shark"]   = "https://static.wikia.nocookie.net/stealanegg/images/e/e5/Mutant_Shark.png/revision/latest?cb=20260901190802",
-    ["cosmic skeleton"] = "https://static.wikia.nocookie.net/stealanegg/images/9/97/Cosmic_Skeleton_Boss.png/revision/latest/scale-to-width-down/185?cb=20260904110709",
-    ["cosmic dragon"]  = "https://asaiya2.github.io/steal-an-egg/Star_Dragon.png",
-    ["cerberus"]       = "https://asaiya2.github.io/steal-an-egg/Cerberus_Flame.png",
-    ["kraken"]         = "https://static.wikia.nocookie.net/stealanegg/images/d/d3/Kraken.png/revision/latest",
-    ["yeti"]           = "https://asaiya2.github.io/steal-an-egg/White_Yeti.png",
-    ["tralaledon"]     = "https://asaiya2.github.io/steal-an-egg/Block_Shark.png",
-    ["trex"]           = "https://asaiya2.github.io/steal-an-egg/Block_TRex.png",
+
+DEFAULT_COLOR = 0x2ECC71  # used if a board has no entry in BOARD_COLORS
+
+# Colour bar on the left of each board (same colours as before)
+BOARD_COLORS = {
+    "Forest": 0x2ECC71,        "Lake": 0x2ECC71,          # green
+    "Desert": 0xE67E22,        "Jungle": 0xE67E22,        # orange
+    "Snow": 0x5DADE2,          "Volcano": 0x5DADE2,       # icy blue
+    "Abyss Ocean": 0x1F77B4,   "Prehistoric": 0x1F77B4,   # deep blue
+    "Cosmic": 0x9B59B6,        "Cherry Blossom": 0x9B59B6,  # purple
+    "Titan Temple": 0x27AE60,  "Dr Scramble": 0x27AE60,   # lab green
+    "Angels / Demons": 0xF1C40F,                          # gold
+}
+
+# ---------------------------------------------------------------------------
+# ONLINE BOARD ART  -  CHANGE THE IMAGE OF ANY BOARD HERE
+# Paste a direct/public image URL on the board's line.
+# GitHub Pages is convenient, but Imgur/i.imgur.com, Postimages, Cloudinary,
+# etc. also work.
+# Set a line to None to remove the banner from that board.
+# After editing, restart the bot (or run !eggdisplay) to apply the change.
+# ---------------------------------------------------------------------------
+_GH = "https://asaiya2.github.io/steal-an-egg/"
+
+DEFAULT_BANNER = "https://github.com/Asaiya2/steal-an-egg/blob/main/neW.png?raw=true"
+DCLINK = "https://github.com/Asaiya2/steal-an-egg/blob/main/dcc.png?raw=true"
+
+BANNERS = {
+    "Forest":          DCLINK,
+    "Lake":            DCLINK,
+    "Desert":          DCLINK,
+    "Jungle":          DCLINK,
+    "Snow":            DCLINK,
+    "Volcano":         DCLINK,
+    "Abyss Ocean":     DCLINK,
+    "Prehistoric":     DCLINK,
+    "Cosmic":          DCLINK,
+    "Cherry Blossom":  DCLINK,
+    "Titan Temple":    DCLINK,
+    "Dr Scramble":     "https://lh3.googleusercontent.com/d/1foRr-S0TTeYw4xCo5WHEDacpxiolPX7-=w1600",
+    "Angels / Demons": DCLINK,
+}
+
+# Optional small header thumbnails. Set a board to a direct image URL, or leave it out / None.
+BOARD_THUMBNAILS = {
+    "Forest": DEFAULT_BANNER,
+    "Lake": DEFAULT_BANNER,
+    "Desert": DEFAULT_BANNER,
+    "Jungle": DEFAULT_BANNER,
+    "Snow": DEFAULT_BANNER,
+    "Volcano": DEFAULT_BANNER,
+    "Abyss Ocean": DEFAULT_BANNER,
+    "Prehistoric": DEFAULT_BANNER,
+    "Cosmic": DEFAULT_BANNER,
+    "Cherry Blossom": DEFAULT_BANNER,
+    "Titan Temple": DEFAULT_BANNER,
+    "Dr Scramble": DEFAULT_BANNER,
+    "Angels / Demons": DEFAULT_BANNER,
+}
+
+# Countdown progress bar. The 5-minute reroll cycle is divided into
+# 10 half-minute steps, so each 30-second refresh removes 10 percentage points.
+def countdown_bar(cycle_end, total=REROLL_INTERVAL, width=10):
+    if not cycle_end:
+        return "▱" * width, 0
+
+    remaining = max(0.0, cycle_end - time.time())
+    percent = round((remaining / total) * 100 / 10) * 10 if total else 0
+    percent = max(0, min(100, percent))
+    filled = round(width * percent / 100)
+    filled = max(0, min(width, filled))
+    bar = "▰" * filled + "▱" * (width - filled)
+    return bar, percent
+
+def fmt_countdown(seconds):
+    """3725 -> '1h 2m', 250 -> '4m 10s', 45 -> '45s'"""
+    seconds = int(max(0, seconds))
+    h, r = divmod(seconds, 3600)
+    m, sec = divmod(r, 60)
+    if h:
+        return f"{h}h {m}m" if m else f"{h}h"
+    if m:
+        return f"{m}m {sec}s" if sec else f"{m}m"
+    return f"{sec}s"
+
+
+# Little icon in front of each biome name
+ZONE_ICONS = {
+    "Forest": "🌲", "Lake": "🌊", "Desert": "🏜️", "Jungle": "🌴", "Snow": "❄️",
+    "Volcano": "🌋", "Abyss Ocean": "🐙", "Prehistoric": "🦖", "Cosmic": "🌌",
+    "Cherry Blossom": "🌸", "Titan Temple": "🏛️", "Angels": "😇", "Demons": "😈",
+    "Dr Scramble": "🧪",
 }
 
 
--- ============================================================
--- EGG VALUES
--- ============================================================
 
-local EGG_VALUES = {
-    ["kitsune"]      = "1.8B/s",
-    ["nightflame"]   = "3B/s",
-    ["world burner"] = "5B/s",
-    ["archangel"]    = "3B/s",
-    ["unicorn"]      = "1B/s",
+def norm(s):
+    """Same rule as norm() in the Lua script: lowercase, strip spaces/_/-"""
+    return re.sub(r"[\s_\-]", "", str(s).lower())
 
-    ["skeleton horse"]       = "1.3B/s",
-    ["pegasus"]              = "1.3B/s",
-    ["oni tiger"]            = "600M/s",
-    ["gorilla king"]         = "880M/s",
-    ["ice dragon"]           = "65M/s",
-    ["mosasaurus"]           = "180M/s",
-    ["el maja"]              = "130M/s",
-    ["phoenix"]              = "85M/s",
-    ["lava dragon"]          = "100M/s",
-    ["eternal lunar dragon"] = "250M/s",
 
-    ["razorfang"]       = "350M/s",
-    ["gargoyle"]        = "225M/s",
-    ["centaur"]         = "350M/s",
-    ["pure jellyfish"]  = "225M/s",
-    ["mutant shark"]    = "215M/s",
-    ["cosmic skeleton"] = "45M/s",
-    ["cosmic dragon"]   = "60M/s",
-    ["cerberus"]        = "8M/s",
-    ["kraken"]          = "15M/s",
-    ["yeti"]            = "5M/s",
-    ["tralaledon"]      = "32M/s",
-    ["trex"]            = "25M/s",
+def E(display, *aliases):
+    """One egg. Add aliases when the game's internal name differs from the display name."""
+    keys = [norm(display)] + [norm(a) for a in aliases]
+    return (display, tuple(dict.fromkeys(keys)))
+
+
+# Zones and eggs as shown on the board. Order here = order on the board.
+CATALOG = {
+    "Forest": [E("Chicken"), E("Dog"), E("Bird"), E("Burrowing Owl"), E("Raccoon"),
+               E("Fox"), E("Bear"), E("Brr Brr Patapim")],
+    "Lake": [E("Frog"), E("Duckling"), E("Catfish"), E("Turtle"),
+             E("Trulimero Trulicina"), E("Swan"), E("Axolotl"), E("Leviathan")],
+    "Desert": [E("Jerboa"), E("Fennec", "FennecFox"), E("Camel"), E("Tob Tobi Tob Tob"),
+               E("Snake"), E("Sand Spider"), E("Scorpion"), E("Royal Sphinx")],
+    "Jungle": [E("Chimpanzee"), E("Toucan"), E("Crocodile"), E("Gorilla"),
+               E("Orangutini Ananassini"), E("Spider"), E("Tiger"), E("King Snake")],
+    "Snow": [E("Penguin"), E("Walrus"), E("Polar Bear"), E("Sabertooth Tiger"),
+             E("Mammoth"), E("King Mammoth"), E("Yeti", "White Yeti"), E("Ice Dragon")],
+    "Volcano": [E("Lava Gecko"), E("Lava Frog"), E("Flaming Bull"), E("Chillin Chilli"),
+                E("Lava Iguana"), E("Cerberus", "Cerberus Flame"), E("Phoenix"), E("Lava Dragon")],
+    "Abyss Ocean": [E("Parrotfish"), E("Swordfish"), E("Shark"), E("Orca"), E("Whale Shark"),
+                    E("Beluga Whale"), E("Kraken"), E("El Maja")],
+    "Prehistoric": [E("Dodo"), E("Pterodactyl"), E("Ankylosaurus"), E("Bronto"), E("Triceratops"),
+                    E("TRex", "Block TRex"), E("Tralaledon", "Block Shark"), E("Mosasaurus", "Mosasaur")],
+    "Cosmic": [E("Centapede"), E("Cosmic Gecko", "Galaxy Gecko"), E("Cosmic Gorilla"),
+               E("La Vacca Saturno Saturnita"), E("Cosmic Dragon", "Star Dragon"),
+               E("Cosmic Skeleton", "Cosmic Skeleton Boss"), E("Eternal Lunar Dragon"), E("Unicorn")],
+    "Cherry Blossom": [E("Crane"), E("Salamander"), E("Red Panda"), E("Snowy Owl"),
+                       E("Koi"), E("Stag"), E("Oni Tiger"), E("Kitsune")],
+    "Titan Temple": [E("Spideron"), E("Crustacia"), E("Bladehide"), E("Mantaris"),
+                     E("Rhinotaur"), E("Mutant Shark"), E("Gorilla King"), E("Nightflame")],
+    "Angels": [E("Light Dove"), E("Winged Lamb"), E("Sacred Moth"), E("Holy Peacock"),
+               E("Pure Jellyfish"), E("Centaur"), E("Pegasus"), E("ArchAngel")],
+    "Demons": [E("Flame Sprite"), E("Toro"), E("Imp"), E("Demon Hound"),
+               E("Gargoyle", "Gargoyle Demon"), E("RazorFang", "Rock Demon"),
+               E("Skeleton Horse"), E("World Burner")],
+    # Dr Scramble banners. The feed sends the ACTIVE banner name; the bot marks it live (1).
+    "Dr Scramble": [E("Biohazard", "Biohazard Pets"), E("Experimental", "Experimental Pets"),
+                    E("Unstable DNA")],
 }
 
+ALL_KEYS = {k for eggs in CATALOG.values() for _, keys in eggs for k in keys}
+ALL_TYPES = sum(len(eggs) for eggs in CATALOG.values())
 
--- ============================================================
--- ROLE IDS
--- ============================================================
+# Which zones go on which board message. Order = order on the board.
+# Every biome has its own board, except Angels + Demons which share one.
+# A board with 3 zones is laid out as:   [zone 1]   [zone 2]
+#                                            [zone 3]
+# (no board uses 3 zones right now, but the layout code is kept)
+BOARDS = [
+    ["Forest"],
+    ["Lake"],
+    ["Desert"],
+    ["Jungle"],
+    ["Snow"],
+    ["Volcano"],
+    ["Abyss Ocean"],
+    ["Prehistoric"],
+    ["Cosmic"],
+    ["Cherry Blossom"],
+    ["Titan Temple"],
+    ["Angels", "Demons"],
+    ["Dr Scramble"],      # keep this one last
+]
 
-local ROLE_IDS = {
-    Secret  = "1552345277459988480",
-    Eternal = "1552345217640698036",
-    Divine  = "1552345257599836160",
+# ---------------------------------------------------------------------------
+# EGG EMOJIS - edit these yourself
+#   "emoji"                -> not set yet (the board shows 🥚 for now)
+#   ":Chicken_W:"          -> an emoji from any server the bot is in, by its name
+#   "<:Chicken_W:123456>"  -> the full emoji code also works
+#   "🐔"                   -> a normal unicode emoji works too
+# The key is the egg's display name exactly as written in CATALOG above.
+# ---------------------------------------------------------------------------
+PLACEHOLDER = "emoji"
+
+EGG_EMOJIS = {
+    # Forest
+    "Chicken": ":Chicken_W:",
+    "Dog": ":Dog_W:",
+    "Bird": ":Bird_W:",
+    "Burrowing Owl": ":Burrowing_Owl_W:",
+    "Raccoon": ":Raccoon_W:",
+    "Fox": ":Fox_W:",
+    "Bear": ":Bear_W:",
+    "Brr Brr Patapim": ":Brr_Brr_Patapim_W:",
+    # Lake
+    "Frog": ":Frog_W:",
+    "Duckling": ":Duckling_W:",
+    "Catfish": ":Catfish_W:",
+    "Turtle": ":Turtle_W:",
+    "Trulimero Trulicina": ":Trulimero_Trulicina_W:",
+    "Swan": ":Swan_W:",
+    "Axolotl": ":Axolotl_W:",
+    "Leviathan": ":Leviathan_W:",
+    # Desert
+    "Jerboa": ":Jerboa_W:",
+    "Fennec": ":Fennec_W:",
+    "Camel": ":Camel_W:",
+    "Tob Tobi Tob Tob": ":Tob_Tobi_Tob_Tob_W:",
+    "Snake": ":Snake_W:",
+    "Sand Spider": ":Sand_Spider_W:",
+    "Scorpion": ":Scorpion_W:",
+    "Royal Sphinx": ":Royal_Sphinx_W:",
+    # Jungle
+    "Chimpanzee": ":Chimpanzee_W:",
+    "Toucan": ":Toucan_W:",
+    "Crocodile": ":Crocodile_W:",
+    "Gorilla": ":Gorilla_W:",
+    "Orangutini Ananassini": ":Orangutini_Ananassini_W:",
+    "Spider": ":Spider_W:",
+    "Tiger": ":Tiger_W:",
+    "King Snake": ":King_Snake_W:",
+    # Snow
+    "Penguin": ":Penguin_W:",
+    "Walrus": ":walrus_W:",
+    "Polar Bear": ":Polar_Bear_W:",
+    "Sabertooth Tiger": ":Sabertooth_Tiger_W:",
+    "Mammoth": ":Mammoth_W:",
+    "King Mammoth": ":King_Mammoth_W:",
+    "Yeti": ":Yeti_W:",
+    "Ice Dragon": ":Ice_Dragon_W:",
+    # Volcano
+    "Lava Gecko": ":Lava_Gecko_W:",
+    "Lava Frog": ":Lava_Frog_W:",
+    "Flaming Bull": ":Flaming_Bull_W:",
+    "Chillin Chilli": ":Chillin_Chilli_W:",
+    "Lava Iguana": ":Lava_Iguana_W:",
+    "Cerberus": ":Cerberus_W:",
+    "Phoenix": ":Phoenix_W:",
+    "Lava Dragon": ":Lava_Dragon_W:",
+    # Abyss Ocean
+    "Parrotfish": ":Parrotfish_W:",
+    "Swordfish": ":Swordfish_W:",
+    "Shark": ":Shark_W:",
+    "Orca": ":Orca_W:",
+    "Whale Shark": ":Whale_W:",
+    "Beluga Whale": ":Beluga_W:",
+    "Kraken": ":Kraken_W:",
+    "El Maja": ":El_Maja_W:",
+    # Prehistoric
+    "Dodo": ":Dodo_W:",
+    "Pterodactyl": ":Pterodactyl_W:",
+    "Ankylosaurus": ":Ankylosaurus_W:",
+    "Bronto": ":Bronto_W:",
+    "Triceratops": ":Triceratops_W:",
+    "TRex": ":TRex_W:",
+    "Tralaledon": ":Tralaledon_W:",
+    "Mosasaurus": ":Mosasaurus_W:",
+    # Cosmic
+    "Centapede": ":Centapede_W:",
+    "Cosmic Gecko": ":Cosmic_Gecko_W:",
+    "Cosmic Gorilla": ":Cosmic_Gorilla_W:",
+    "La Vacca Saturno Saturnita": ":La_Vacca_Saturno_Saturnita_W:",
+    "Cosmic Dragon": ":Cosmic_Dragon_W:",
+    "Cosmic Skeleton": ":Cosmic_Skeleton_Boss_W:",
+    "Eternal Lunar Dragon": ":Eternal_Lunar_Dragon_W:",
+    "Unicorn": ":Unicorn_W:",
+    # Cherry Blossom
+    "Crane": ":Crane_W:",
+    "Salamander": ":Salamander_W:",
+    "Red Panda": ":Red_Panda_W:",
+    "Snowy Owl": ":Snowy_Owl_W:",
+    "Koi": ":Koi_W:",
+    "Stag": ":Stag_W:",
+    "Oni Tiger": ":Oni_Tiger_W:",
+    "Kitsune": ":Kitsune_W:",
+    # Titan Temple
+    "Spideron": ":Spideron_W:",
+    "Crustacia": ":Crustacia_W:",
+    "Bladehide": ":Bladehide_W:",
+    "Mantaris": ":Mantaris_W:",
+    "Rhinotaur": ":Rhinotaur_W:",
+    "Mutant Shark": ":Mutant_Shark_W:",
+    "Gorilla King": ":Gorilla_King_W:",
+    "Nightflame": ":Nightflame_W:",
+    # Angels
+    "Light Dove": ":Light_Dove_W:",
+    "Winged Lamb": ":Winged_Lamb_W:",
+    "Sacred Moth": ":Sacred_Moth_W:",
+    "Holy Peacock": ":Holy_Peacock_W:",
+    "Pure Jellyfish": ":Pure_Jellyfish_W:",
+    "Centaur": ":Centaur_W:",
+    "Pegasus": ":Pegasus_W:",
+    "ArchAngel": ":ArchAngel_W:",
+    # Demons
+    "Flame Sprite": ":Flame_Sprite_W:",
+    "Toro": ":Toro_W:",
+    "Imp": ":Imp_W:",
+    "Demon Hound": ":Demon_Hound_W:",
+    "Gargoyle": ":Gargoyle_W:",
+    "RazorFang": ":RazorFang_W:",
+    "Skeleton Horse": ":Skeleton_Horse_W:",
+    "World Burner": ":World_Burner_W:",
+    # Dr Scramble
+    "Biohazard": ":Biohazard_W:",
+    "Experimental": ":Experimental_W:",
+    "Unstable DNA": ":Unstable_W:",
 }
 
-
--- ============================================================
--- WEBHOOK STYLES
--- ============================================================
-
-local STYLE = {
-    Secret  = { color = 0xE74C3C, emoji = "🔮", title = "SECRET EGG SPAWNED",  tag = "A Hidden Egg has appeared!" },
-    Eternal = { color = 0x9B59B6, emoji = "♾️", title = "ETERNAL EGG SPAWNED", tag = "An Immortal Egg has awakened!" },
-    Divine  = { color = 0xF1C40F, emoji = "✨", title = "DIVINE EGG SPAWNED", tag = "A Heavenly Egg has descended!" },
-}
-
-local BOT_NAME   = "WORST • Steal An Egg"
-local BOT_AVATAR = "https://github.com/Asaiya2/steal-an-egg/blob/main/neW.png?raw=true"
-
-
--- ============================================================
--- SHARED
--- ============================================================
-
-local HttpService = game:GetService("HttpService")
-local RS          = game:GetService("ReplicatedStorage")
-local Players     = game:GetService("Players")
-
-local Assets = nil
-local Areas = nil
-
-pcall(function()
-    Assets = require(RS.Data.Assets)
-end)
-
-pcall(function()
-    Areas = require(RS.Data.Areas)
-end)
-
--- Uses the same game-side resolver as WORST Hub:
--- AssetCategory -> Assets.Directory entry -> DisplayName.
--- This is the authoritative name for an egg; the feed should not
--- have to guess from the internal AssetCategory string.
-local assetInfoCache = {}
-
-local function normalizeAssetName(s)
-    return tostring(s or ""):lower():gsub("[^%a%d]", "")
-end
-
-local function getAssetInfo(category)
-    local categoryKey = tostring(category or "")
-
-    if categoryKey == "" then
-        return nil
-    end
-
-    if assetInfoCache[categoryKey] then
-        return assetInfoCache[categoryKey]
-    end
-
-    local directory = type(Assets) == "table" and Assets.Directory or nil
-    local entry = type(directory) == "table" and directory[categoryKey] or nil
-
-    -- Same fallback used by WORST Hub: compare the normalized
-    -- category against the directory key, _id, DisplayName,
-    -- and Egg.ModelName.
-    if entry == nil and type(directory) == "table" then
-        local wanted = normalizeAssetName(categoryKey)
-
-        for key, candidate in pairs(directory) do
-            if type(candidate) == "table" then
-                local values = {
-                    tostring(key),
-                    tostring(candidate._id or ""),
-                    tostring(candidate.DisplayName or ""),
-                }
-
-                local egg = type(candidate.Egg) == "table" and candidate.Egg or nil
-                if egg then
-                    values[#values + 1] = tostring(egg.ModelName or "")
-                end
-
-                for _, value in ipairs(values) do
-                    if value ~= "" and normalizeAssetName(value) == wanted then
-                        entry = candidate
-                        break
-                    end
-                end
-            end
-
-            if entry ~= nil then
-                break
-            end
-        end
-    end
-
-    local info = {
-        Name = type(entry) == "table"
-            and tostring(entry.DisplayName or categoryKey)
-            or categoryKey,
-
-        Category = categoryKey,
-        Rarity = "Common",
-        RarityNumber = 0,
-        Icon = type(entry) == "table" and entry.Icon or nil,
-    }
-
-    if type(entry) == "table" then
-        local rarity = type(entry.Rarity) == "table" and entry.Rarity or nil
-
-        if rarity then
-            info.Rarity = tostring(rarity.DisplayName or rarity._id or "Common")
-            info.RarityNumber = tonumber(rarity.RarityNumber or rarity.Rank) or 0
-        end
-    end
-
-    assetInfoCache[categoryKey] = info
-    return info
-end
-
-local function getAreaDisplayName(areaId)
-    local key = tostring(areaId or "")
-    if key == "" then
-        return ""
-    end
-
-    local directory = type(Areas) == "table" and (Areas.Directory or Areas) or nil
-    local entry = type(directory) == "table" and directory[key] or nil
-
-    if type(entry) == "table" then
-        return tostring(entry.DisplayName or key)
-    end
-
-    return key
-end
-
-
-local httpRequest = request or http_request or (syn and syn.request)
-
-local function validUrl(u)
-    return type(u) == "string"
-        and u:find("discord.com/api/webhooks/", 1, true) ~= nil
-end
-
--- retry = true: if Discord answers "rate limited" (429), wait and try again
--- (used for rare egg alerts so none get lost).
-local function postWebhook(url, payload, retry)
-    if not httpRequest then
-        warn("[EGG] No HTTP request function found in this executor.")
-        return
-    end
-
-    if not validUrl(url) then
-        warn("[EGG] Webhook not set or invalid.")
-        return
-    end
-
-    task.spawn(function()
-        for attempt = 1, (retry and 4 or 1) do
-            local ok, res = pcall(function()
-                return httpRequest({
-                    Url     = url,
-                    Method  = "POST",
-                    Headers = { ["Content-Type"] = "application/json" },
-                    Body    = HttpService:JSONEncode(payload),
-                })
-            end)
-
-            if ok and type(res) == "table" and tonumber(res.StatusCode) == 429 then
-                local waitFor = 1
-                pcall(function()
-                    local d = HttpService:JSONDecode(res.Body)
-                    waitFor = tonumber(d.retry_after) or 1
-                end)
-                task.wait(waitFor + 0.1)
-            else
-                break
-            end
-        end
-    end)
-end
-
-local function norm(s)
-    local r = tostring(s):lower():gsub("[%s_%-]", "")
-    return r
-end
-
-local ALIASES = {}
-for _, eggs in pairs(EGG_NAMES) do
-    for board, gameNames in pairs(eggs) do
-        if type(gameNames) ~= "table" then
-            gameNames = { gameNames }
-        end
-        for _, g in ipairs(gameNames) do
-            ALIASES[norm(g)] = norm(board)
-        end
-    end
-end
-
--- normalized name -> the nice display name used on the boards ("razorfang" -> "RazorFang")
-local DISPLAY_OF = {}
-for _, eggs in pairs(EGG_NAMES) do
-    for board in pairs(eggs) do
-        if DISPLAY_OF[norm(board)] == nil then
-            DISPLAY_OF[norm(board)] = board
-        end
-    end
-end
-
-
--- ============================================================
--- PART 1: RARE EGG ALERTS
--- ============================================================
-
--- normalized egg name -> { name = "kraken", tier = "Secret" }
-local RARE_INFO = {}
-
-for _, name in ipairs(SECRETS)  do RARE_INFO[norm(name)] = { name = name, tier = "Secret"  } end
-for _, name in ipairs(ETERNALS) do RARE_INFO[norm(name)] = { name = name, tier = "Eternal" } end
-for _, name in ipairs(DIVINES)  do RARE_INFO[norm(name)] = { name = name, tier = "Divine"  } end
-
-RARE_INFO["tyrannosaurusrex"] = RARE_INFO["trex"]
-
-local function prettyName(name)
-    local r = name:gsub("(%a)([%w']*)", function(a, b)
-        return a:upper() .. b:lower()
-    end)
-    return r
-end
-
-local function sendEggEmbed(eggName, tier, location)
-    local style  = STYLE[tier]
-    local roleId = ROLE_IDS[tier]
-
-    local mention = roleId and ("<@&" .. roleId .. ">") or ""
-    local name    = (DISPLAY_OF[norm(eggName)] or prettyName(eggName)) .. " Egg"
-    local now     = os.time()
-
-    local imageUrl = EGG_IMAGES[eggName]
-    local eggValue = EGG_VALUES[eggName]
-
-    if not eggValue or eggValue == "" then
-        eggValue = "VALUE NOT SET"
-    end
-
-    local thumbnail = nil
-
-    if imageUrl and imageUrl ~= "" and imageUrl ~= "link here" then
-        thumbnail = { url = imageUrl }
-    end
-
-    local description = "*" .. style.tag .. "*"
-
-    if SHOW_LOCATION and location and location ~= "" then
-        description = description .. "\n📍 **" .. location .. "**"
-    end
-
-    local embed = {
-        title       = style.emoji .. "  " .. style.title .. "  " .. style.emoji,
-        description = description,
-        color       = style.color,
-
-        fields = {
-            { name = "🥚 Egg",          value = "**" .. name .. "**",             inline = true  },
-            { name = "💎 Rarity",       value = "**" .. tier .. "**",             inline = true  },
-            { name = "⏱️ Spotted",      value = "**<t:" .. now .. ":R>**",        inline = true  },
-            { name = "💰 EGG VALUE",    value = "```" .. eggValue .. "```",       inline = false },
-        },
-
-        footer    = { text = "https://discord.gg/W0RST • " .. tier .. " Alert" },
-        timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ", now),
-    }
-
-    if thumbnail then
-        embed.thumbnail = thumbnail
-    end
-
-    postWebhook(WEBHOOKS[tier], {
-        username   = BOT_NAME,
-        avatar_url = (BOT_AVATAR ~= "") and BOT_AVATAR or nil,
-        content    = mention .. " " .. style.emoji .. " **" .. name .. "** just spawned!",
-        allowed_mentions = { parse = { "roles" } },
-        embeds     = { embed },
-    }, true)
-end
-
-if TEST_MODE then
-    task.spawn(function()
-        task.wait(1)
-        sendEggEmbed("unicorn", "Divine", "Cosmic")
-        task.wait(1)
-        sendEggEmbed("gorilla king", "Eternal", "Titan Temple")
-        task.wait(1)
-        sendEggEmbed("razorfang", "Secret", "Demons")
-    end)
-end
-
-
--- ============================================================
--- PART 2: BOT FEED
--- ============================================================
-
--- NOTE: "Dr Scramble" (and Angels/Demons) are intentionally NOT in this list.
--- The settle check expects EGGS_PER_ZONE eggs in every zone listed here, and
--- event zones are not always populated.
-local NORMAL_ZONES = {
-    "Forest", "Lake", "Desert", "Jungle", "Snow", "Volcano",
-    "Abyss Ocean", "Prehistoric", "Cosmic", "Cherry Blossom", "Titan Temple",
-}
-
-local ZONE_OF = {}
-
-for zone, eggs in pairs(EGG_NAMES) do
-    for board in pairs(eggs) do
-        ZONE_OF[norm(board)] = zone
-    end
-end
-
-
--- ============================================================
--- FIXED BUILD SNAPSHOT
--- ============================================================
--- Main source: EggState.ReadFieldEggs()
--- Fallback: AreaEggSlotsClient
---
--- The fallback is what was added for eggs that aren't being
--- returned by ReadFieldEggs(), such as the Angels/Demons if
--- their physical slots are present there.
---
--- Returns: counts, ids, ok, eggs
---   eggs = one entry per egg that exists right now (used by the
---   rare egg alerts): { uid, k, nameKey, catKey, areaId }
--- ============================================================
-
-local function buildSnapshot()
-    local counts, ids, eggs = {}, {}, {}
-
-    local ok, es = pcall(function()
-        return require(RS.Client.EggState)
-    end)
-
-    if not (ok and es) then
-        return counts, ids, false, eggs
-    end
-
-    local records = {}
-
-    -- ========================================================
-    -- SOURCE 1: EggState.ReadFieldEggs()
-    -- ========================================================
-
-    local ok2, data = pcall(es.ReadFieldEggs)
-
-    if ok2 and type(data) == "table" then
-        local raw = data.Records or data
-
-        if type(raw) == "table" then
-            for key, r in pairs(raw) do
-                if type(r) == "table" then
-
-                    if not r.Uid and type(key) == "string" then
-                        r.Uid = key
-                    end
-
-                    table.insert(records, r)
-                end
-            end
-        end
-    end
-
-
-    -- ========================================================
-    -- SOURCE 2: AreaEggSlotsClient
-    -- ========================================================
-
-    local slotsFolder = workspace:FindFirstChild("AreaEggSlotsClient")
-
-    if slotsFolder then
-        local seenUid = {}
-        for _, existing in ipairs(records) do
-            local eu = tostring(existing.Uid or "")
-            if eu ~= "" then
-                seenUid[eu] = true
-            end
-        end
-
-        local function scanSlots(container)
-            for _, slot in ipairs(container:GetChildren()) do
-                if slot:IsA("Folder") or slot:IsA("Model") then
-                    scanSlots(slot)
-                end
-
-                local uid = slot.Name
-                if uid and uid ~= "" and not seenUid[tostring(uid)] then
-                    local category =
-                        slot:GetAttribute("Category")
-                        or slot:GetAttribute("AssetCategory")
-
-                    if category and category ~= "" then
-                        local areaId =
-                            slot:GetAttribute("AreaId")
-                            or slot:GetAttribute("Area")
-
-                        table.insert(records, {
-                            Uid = uid,
-                            AssetCategory = category,
-                            AreaId = areaId,
-                            State = "Slot",
-                            PhysicalModel = slot,
-                        })
-                        seenUid[tostring(uid)] = true
-                    end
-                end
-            end
-        end
-
-        scanSlots(slotsFolder)
-    end
-
-    -- ========================================================
-    -- PROCESS RECORDS
-    -- ========================================================
-
-    for _, r in ipairs(records) do
-
-        local uid = tostring(r.Uid or "")
-
-        local category =
-            r.AssetCategory
-            or r.Category
-
-        local info = category and getAssetInfo(category) or nil
-        local name = info and info.Name or category
-
-        if DEBUG_PRINT then
-            print(
-                "[EGG DEBUG]",
-                "UID =", uid,
-                "Category =", tostring(category),
-                "Name =", tostring(name),
-                "AreaId =", tostring(r.AreaId),
-                "Area =", getAreaDisplayName(r.AreaId),
-                "State =", tostring(r.State)
-            )
-        end
-
-        if name
-            and not (IGNORE_FIRST_AREA and uid:find("FirstArea"))
-        then
-
-            local k = norm(name)
-
-            -- Prefer the game's resolved DisplayName. If the catalog
-            -- has a legacy/internal alias, fall back to AssetCategory.
-            k = ALIASES[k] or ALIASES[norm(category)] or k
-
-            counts[k] = (counts[k] or 0) + 1
-
-            local id
-
-            if uid ~= "" then
-                id = uid .. "|" .. k
-            else
-                id = k .. "#" .. counts[k]
-            end
-
-            ids[id] = true
-
-            eggs[#eggs + 1] = {
-                uid     = uid,
-                k       = k,
-                nameKey = norm(name),
-                catKey  = category and norm(category) or "",
-                areaId  = r.AreaId,
-            }
-        end
-    end
-
-    if DEBUG_PRINT then
-        local total = 0
-        for _, n in pairs(counts) do
-            total = total + n
-        end
-        print("[EGG DEBUG] records:", #records, "counted:", total)
-        for k, n in pairs(counts) do
-            print("[EGG DEBUG] count", k, n)
-        end
-    end
-
-    return counts, ids, true, eggs
-end
-
-
--- ============================================================
--- RARE EGG DETECTOR
--- Runs on every scan of the feed loop. Every rare egg that exists gets
--- exactly one alert (tracked by its unique id). Alerts go through a small
--- queue so a burst of rare eggs doesn't hit Discord's rate limit; the first
--- alert is sent immediately.
--- ============================================================
-
-local alertQueue = {}
-
-task.spawn(function()
-    while true do
-        local a = table.remove(alertQueue, 1)
-
-        if a then
-            pcall(sendEggEmbed, a.name, a.tier, a.location)
-            task.wait(ALERT_SEND_GAP)
-        else
-            task.wait(0.05)
-        end
-    end
-end)
-
-local alerted       = {}    -- uid -> last time this egg was seen (os.clock)
-local alertedNoUid  = {}    -- egg name -> how many uid-less copies were already alerted
-local firstRareScan = true
-
-local function checkRare(eggs)
-    local now = os.clock()
-    local noUidNow = {}
-
-    for _, e in ipairs(eggs) do
-        local info = RARE_INFO[e.k] or RARE_INFO[e.nameKey] or RARE_INFO[e.catKey]
-
-        if info then
-            local isNew = false
-
-            if e.uid ~= "" then
-                if alerted[e.uid] == nil then
-                    isNew = true
-                end
-                alerted[e.uid] = now
-            else
-                -- no unique id: count copies instead (2 Stags = 2 alerts)
-                local n = (noUidNow[info.name] or 0) + 1
-                noUidNow[info.name] = n
-
-                if n > (alertedNoUid[info.name] or 0) then
-                    alertedNoUid[info.name] = n
-                    isNew = true
-                end
-            end
-
-            if isNew and (ALERT_EXISTING_ON_START or not firstRareScan) then
-                local location = ZONE_OF[e.k] or ZONE_OF[e.nameKey] or getAreaDisplayName(e.areaId)
-
-                alertQueue[#alertQueue + 1] = {
-                    name     = info.name,
-                    tier     = info.tier,
-                    location = location,
-                }
-
-                print("[EGG] rare spotted:", info.name, "(" .. info.tier .. ")")
-            end
-        end
-    end
-
-    firstRareScan = false
-
-    -- forget eggs that have been gone for a while
-    for uid, seenAt in pairs(alerted) do
-        if now - seenAt > ALERT_FORGET_SECONDS then
-            alerted[uid] = nil
-        end
-    end
-
-    for name in pairs(alertedNoUid) do
-        if not noUidNow[name] then
-            alertedNoUid[name] = nil
-        end
-    end
-end
-
-
--- ============================================================
--- DR. SCRAMBLE BANNER READER
--- Reads the current banner from the game's own GUI:
---   PlayerGui.DrScrambleTradeIn.DrScrambleTradeInMain.CurrentEggInfoHolder.EggName
--- Returns: name ("Experimental Pets"), secondsLeft (or nil)
--- ============================================================
-
-local function cleanText(s)
-    local r = tostring(s):gsub("<[^>]->", "")
-    r = r:gsub("^%s+", ""):gsub("%s+$", "")
-    return r
-end
-
-local function readScramble()
-    local pg = Players.LocalPlayer and Players.LocalPlayer:FindFirstChild("PlayerGui")
-    local gui = pg and pg:FindFirstChild("DrScrambleTradeIn")
-    local main = gui and gui:FindFirstChild("DrScrambleTradeInMain")
-    local holder = main and main:FindFirstChild("CurrentEggInfoHolder")
-    if not holder then
-        return nil
-    end
-
-    local nameLabel = holder:FindFirstChild("EggName")
-    if not (nameLabel and nameLabel:IsA("TextLabel")) then
-        return nil
-    end
-
-    -- "Experimental Pets Banner" -> "Experimental Pets"
-    local name = cleanText(nameLabel.Text)
-    name = name:gsub("%s*Banner%s*$", "")
-    if name == "" then
-        return nil
-    end
-
-    -- optional: "Rotates in: 50m 42s" -> seconds
-    local left = nil
-    for _, obj in ipairs(holder:GetDescendants()) do
-        if obj:IsA("TextLabel") then
-            local t = cleanText(obj.Text)
-            if t:lower():find("rotates in") then
-                local h = tonumber(t:match("(%d+)%s*h")) or 0
-                local m = tonumber(t:match("(%d+)%s*m")) or 0
-                local s = tonumber(t:match("(%d+)%s*s")) or 0
-                if h + m + s > 0 then
-                    left = h * 3600 + m * 60 + s
-                end
-                break
-            end
-        end
-    end
-
-    return name, left
-end
-
-
--- cycleAge = seconds since the current egg cycle started (nil until a cycle
--- has been seen). The bot uses it for the "Next update" countdown.
-local function sendFeed(counts, cycleAge)
-    local data = {}
-
-    for k, v in pairs(counts) do
-        data[k] = v
-    end
-
-    if cycleAge then
-        data._age = cycleAge
-    end
-
-    -- Dr. Scramble current banner (optional, skipped if the GUI isn't found)
-    local okS, scrambleName, scrambleLeft = pcall(readScramble)
-    if okS and scrambleName then
-        data._scramble = scrambleName
-        if scrambleLeft then
-            data._scramble_left = scrambleLeft
-        end
-    end
-
-    local body = "EGGDATA" .. HttpService:JSONEncode(data)
-
-    if #body > 1990 then
-        warn("[EGG FEED] payload too long (" .. #body .. " chars)")
-        return
-    end
-
-    postWebhook(FEED_WEBHOOK, {
-        username = "egg-feed",
-        content  = body,
-    })
-end
-
-local function copyCounts(t)
-    local c = {}
-    for k, v in pairs(t) do
-        c[k] = v
-    end
-    return c
-end
-
-local function signature(t)
-    local parts = {}
-
-    for k, n in pairs(t) do
-        parts[#parts + 1] = k .. ":" .. n
-    end
-
-    table.sort(parts)
-
-    return table.concat(parts, "|")
-end
-
-local function diffIds(a, b)
-    local gone, fresh = 0, 0
-
-    for id in pairs(a) do
-        if not b[id] then
-            gone = gone + 1
-        end
-    end
-
-    for id in pairs(b) do
-        if not a[id] then
-            fresh = fresh + 1
-        end
-    end
-
-    return gone, fresh
-end
-
-local function zonesComplete(counts)
-    local perZone, unmapped = {}, 0
-
-    for k, n in pairs(counts) do
-        local zone = ZONE_OF[k]
-
-        if zone then
-            perZone[zone] = (perZone[zone] or 0) + n
-        else
-            unmapped = unmapped + n
-        end
-    end
-
-    local shortBy = 0
-
-    for _, zone in ipairs(NORMAL_ZONES) do
-        shortBy = shortBy + math.max(
-            0,
-            EGGS_PER_ZONE - (perZone[zone] or 0)
+DEFAULT_EMOJI = "🥚"      # shown while an egg's emoji is still "emoji" / not found
+SPACER = "\u200b"         # invisible text, used to build the empty gaps in 3-zone boards
+
+
+class EggStatus(commands.Cog):
+    def __init__(self, bot):
+        self.bot = bot
+        os.makedirs(DB_FOLDER, exist_ok=True)
+        self.db = sqlite3.connect(DB_PATH)
+        self.db.row_factory = sqlite3.Row
+        self.db.execute(
+            """CREATE TABLE IF NOT EXISTS egg_board (
+                   guild_id         INTEGER PRIMARY KEY,
+                   input_channel_id INTEGER,
+                   board_channel_id INTEGER,
+                   board_message_id INTEGER,
+                   last_seen_message_id INTEGER,
+                   counts           TEXT,
+                   updated_at       REAL)"""
         )
-    end
+        # upgrade older databases
+        cols = {r[1] for r in self.db.execute("PRAGMA table_info(egg_board)")}
+        if "board_message_ids" not in cols:  # the board message ids, as a JSON list
+            self.db.execute("ALTER TABLE egg_board ADD COLUMN board_message_ids TEXT")
+        if "cycle_end" not in cols:          # unix time of the next egg reroll
+            self.db.execute("ALTER TABLE egg_board ADD COLUMN cycle_end REAL")
+        if "last_seen_message_id" not in cols:
+            self.db.execute("ALTER TABLE egg_board ADD COLUMN last_seen_message_id INTEGER")
+        if "scramble" not in cols:           # current Dr. Scramble banner name
+            self.db.execute("ALTER TABLE egg_board ADD COLUMN scramble TEXT")
+        if "scramble_end" not in cols:       # unix time the banner rotates
+            self.db.execute("ALTER TABLE egg_board ADD COLUMN scramble_end REAL")
+        self.db.commit()
+        self._locks = defaultdict(asyncio.Lock)  # one edit/post pass at a time per server
+        self._offline = {}                       # guild_id -> last known offline state
+        self._expired = {}                       # guild_id -> last known "countdown reached 0" state
+        self._unknown = {}                       # egg names in the latest feed that the catalog doesn't know -> count
+        self._last = {}                          # (guild_id, board index) -> last embed sent, to skip useless edits
 
-    return shortBy <= unmapped
-end
+    async def cog_load(self):
+        self.watchdog.start()
 
+    async def cog_unload(self):
+        self.watchdog.cancel()
+        self.db.close()
 
--- ============================================================
--- FEED LOOP
--- ============================================================
+    # ---------- storage ----------
+    def _get(self, guild_id):
+        return self.db.execute("SELECT * FROM egg_board WHERE guild_id = ?", (guild_id,)).fetchone()
 
-task.spawn(function()
-    local latched, cycleStart = {}, nil
-    local windowIds, windowAt = nil, 0
-    local settling, settleStart = false, 0
-    local lastSig, lastSentAt = nil, 0
+    def _save(self, guild_id, **fields):
+        self.db.execute("INSERT OR IGNORE INTO egg_board (guild_id) VALUES (?)", (guild_id,))
+        sets = ", ".join(f"{k} = ?" for k in fields)  # keys come from this file only
+        self.db.execute(f"UPDATE egg_board SET {sets} WHERE guild_id = ?", (*fields.values(), guild_id))
+        self.db.commit()
 
-    -- new-cycle detector (for the countdown)
-    local refIds, refAt, rerollAt = nil, 0, nil
+    @staticmethod
+    def _ids(row):
+        if not row or not row["board_message_ids"]:
+            return []
+        try:
+            return [int(x) for x in json.loads(row["board_message_ids"])]
+        except (ValueError, TypeError):
+            return []
 
-    while true do
+    def _last_seen_id(self, row):
+        if not row or not row["last_seen_message_id"]:
+            return None
+        try:
+            return int(row["last_seen_message_id"])
+        except (ValueError, TypeError):
+            return None
 
-        pcall(function()
+    # ---------- emoji ----------
+    def _emoji_maps(self):
+        available = [e for e in self.bot.emojis if e.available]
+        by_name = {e.name.lower(): str(e) for e in available}   # exact name, e.g. "chicken_w"
+        by_norm = {norm(e.name): str(e) for e in available}     # loose name, e.g. "chicken"
+        return by_name, by_norm
 
-            local live, ids, ok, eggs = buildSnapshot()
+    def _emoji_for(self, display, keys, by_name, by_norm):
+        """Returns (emoji, found). found=False means the egg is still using the default."""
+        raw = (EGG_EMOJIS.get(display) or "").strip()
+        if raw and raw.lower() != PLACEHOLDER:
+            m = re.fullmatch(r":([A-Za-z0-9_]+):", raw)
+            if m:  # ":Chicken_W:" -> look the emoji up by name
+                hit = by_name.get(m.group(1).lower())
+                if hit:
+                    return hit, True
+            else:  # "<:Chicken_W:123>" or a unicode emoji -> use as is
+                return raw, True
+        # fallback: an emoji simply named like the egg (e.g. "dog")
+        auto = next((by_norm[k] for k in keys if k in by_norm), None)
+        return (auto, True) if auto else (DEFAULT_EMOJI, False)
 
-            if not ok then
+    # ---------- Last Seen helpers ----------
+    def _last_seen_value(self, guild_id, display):
+        """Return a Discord relative timestamp for the egg's last appearance."""
+        alerts = self.bot.get_cog("EggAlerts")
+        if not alerts:
+            return "—"
+        try:
+            ts = alerts._last_seen_ts(guild_id, display)
+        except Exception:
+            return "—"
+        return f"<t:{int(ts)}:R>" if ts is not None else "—"
+
+    # ---------- rendering ----------
+    def _board_live_stats(self, counts, zones):
+        total_types = sum(len(CATALOG[z]) for z in zones)
+        live_types = 0
+        total_eggs = 0
+        for zone in zones:
+            for _, keys in CATALOG[zone]:
+                n = sum(counts.get(k, 0) for k in keys)
+                if zone != "Dr Scramble":   # the banner is not a field egg
+                    total_eggs += n
+                if n > 0:
+                    live_types += 1
+        return total_types, live_types, total_eggs
+
+    def _rarest_live(self, counts, zones):
+        tier_rank = {"Secret": 1, "Eternal": 2, "Divine": 3}
+        best = None
+        best_rank = 0
+        for zone in zones:
+            for display, keys in CATALOG[zone]:
+                if sum(counts.get(k, 0) for k in keys) <= 0:
+                    continue
+                info = RARE.get(display)
+                if not info:
+                    continue
+                tier = info[0]
+                rank = tier_rank.get(tier, 0)
+                if rank > best_rank:
+                    best = (display, tier)
+                    best_rank = rank
+        return best
+
+    def _render_board(self, guild_id, idx, counts, updated_at, offline, cycle_end, maps, scramble=None):
+        by_name, by_norm = maps
+        zones = BOARDS[idx]
+        key = board_key(zones)
+        down = updated_at is None or offline
+        color = GREY if down else BOARD_COLORS.get(key, DEFAULT_COLOR)
+        embed = discord.Embed(colour=color)
+
+        zone_title = "  /  ".join(
+            f"{ZONE_ICONS.get(z, '')} {z}" for z in zones
+        )
+        total_types, live_types, total_eggs = self._board_live_stats(counts, zones)
+        embed.title = zone_title
+
+        # Dr Scramble has no field eggs, so it doesn't show an egg count.
+        eggs_line = "" if "Dr Scramble" in zones else f"\n🥚 **{total_eggs} eggs**"
+
+        if down:
+            status = "⚠️ **Feed offline** — showing last known data" if updated_at else "⏳ **Waiting for egg data…**"
+            embed.description = f"{status}{eggs_line}"
+        elif cycle_end:
+            remaining = max(0.0, cycle_end - time.time())
+
+            if remaining >= 60:
+                minutes = int(remaining // 60)
+                seconds = int(remaining % 60)
+                if seconds:
+                    time_text = f"{minutes}m {seconds}s"
+                else:
+                    time_text = f"{minutes}m"
+            else:
+                time_text = f"{int(remaining)}s"
+
+            embed.description = f"⏱️ **Next update in {time_text}**{eggs_line}"
+        else:
+            embed.description = f"⏱️ **Next update: calibrating…**{eggs_line}"
+
+        if "Dr Scramble" in zones:
+            # The egg reroll timer doesn't apply here. "Next update" is the time
+            # left until the Dr Scramble banner rotates.
+            name, end = scramble if scramble else (None, None)
+            parts = []
+            if down:
+                parts.append("⚠️ **Feed offline** — showing last known data" if updated_at
+                             else "⏳ **Waiting for egg data…**")
+            elif end:
+                left = end - time.time()
+                if left > 0:
+                    parts.append(f"**The Board will update when the banner changes**")
+                else:
+                    parts.append("⏱️ **Next update: any moment…**")
+            if name:
+                parts.append(f"🧪 **Current banner:** {name}")
+            embed.description = "\n".join(parts) or "⏳ **Waiting for banner data…**"
+
+        thumb = BOARD_THUMBNAILS.get(key)
+        if thumb:
+            embed.set_thumbnail(url=thumb)
+
+        # A board with a single biome uses the full width; two biomes sit side by side.
+        side_by_side = len(zones) > 1
+
+        def zone_field(zone):
+            lines = []
+            live = 0
+            # Always use the fixed catalog order. Availability never changes
+            # an egg's position on the board.
+            for display, keys in CATALOG[zone]:
+                n = sum(counts.get(k, 0) for k in keys)
+                emoji, _ = self._emoji_for(display, keys, by_name, by_norm)
+                seen = self._last_seen_value(guild_id, display)
+                rarity = RARE.get(display)
+                tag = f" **`{rarity[0].upper()}`**" if rarity else ""
+                if n > 0:
+                    live += 1
+                    lines.append(f"🟢 {emoji} **{display}** **{n}**{tag}  {seen}")
+                else:
+                    lines.append(f"🔴 {emoji} {display} 0{tag}  {seen}")
+            name = f"{zone}  ·  {live}/{len(CATALOG[zone])}"
+            embed.add_field(name=name, value="\n".join(lines), inline=side_by_side)
+
+        if len(zones) == 3:
+            # 3-zone layout: first row = zone 1 | empty | zone 2; second row = empty | zone 3 | empty.
+            zone_field(zones[0])
+            embed.add_field(name="\u200b", value="\u200b", inline=True)
+            zone_field(zones[1])
+            embed.add_field(name="\u200b", value="\u200b", inline=True)
+            zone_field(zones[2])
+            embed.add_field(name="\u200b", value="\u200b", inline=True)
+        else:
+            for zone in zones:
+                zone_field(zone)
+
+        rarest = self._rarest_live(counts, zones)
+        if rarest:
+            embed.set_footer(text=f"🏆 Rarest egg: {rarest[0]}")
+        else:
+            embed.set_footer(text="https://discord.gg/W0RST  •  WORST NOTIFIER")
+
+        return embed
+
+    def _embeds(self, row):
+        counts = json.loads(row["counts"]) if row and row["counts"] else {}
+        updated = row["updated_at"] if row else None
+        cycle_end = row["cycle_end"] if row else None
+        offline = updated is None or time.time() - updated > OFFLINE_AFTER
+        maps = self._emoji_maps()
+        scramble = (row["scramble"], row["scramble_end"]) if row and row["scramble"] else None
+
+        out = []
+        for i, zones in enumerate(BOARDS):
+            key = board_key(zones)
+            # First embed = banner image; second embed = actual board. Both share
+            # the same colour and are sent as ONE Discord message.
+            banner_url = BANNERS.get(key, DEFAULT_BANNER)
+            board = self._render_board(row["guild_id"], i, counts, updated, offline, cycle_end, maps, scramble)
+            if banner_url:
+                banner = discord.Embed(colour=GREY if offline else BOARD_COLORS.get(key, DEFAULT_COLOR))
+                banner.set_image(url=banner_url)
+                out.append([banner, board])
+            else:
+                out.append([board])
+        return out
+
+    # ---------- posting / editing without ever spamming ----------
+    def _is_board_message(self, msg):
+        """True for any egg board message this bot posted (this version or an older one)."""
+        if msg.author.id != self.bot.user.id or not msg.embeds:
+            return False
+        zones = list(CATALOG)
+        for e in msg.embeds:
+            if e.title and "Available Eggs" in e.title:
+                return True
+            if any(z in (f.name or "") for f in e.fields for z in zones):
+                return True
+        return False
+
+    async def _post_boards(self, channel):
+        """Wipes every old board message, then posts all the board messages.
+        Each board message contains a banner embed followed by the board embed.
+        The caller must already hold self._locks[guild_id]."""
+        gid = channel.guild.id
+        try:
+            # limit is high enough to also catch the older 7-board layout
+            async for msg in channel.history(limit=200):
+                if self._is_board_message(msg):
+                    try:
+                        await msg.delete()
+                    except discord.HTTPException:
+                        pass
+        except discord.HTTPException as e:
+            print(f"[EGG] could not clean old boards (need Read Message History?): {e}")
+
+        embed_groups = self._embeds(self._get(gid))
+        ids = []
+        for embeds in embed_groups:
+            msg = await channel.send(embeds=embeds)
+            ids.append(msg.id)
+
+        self._save(gid, board_channel_id=channel.id,
+                   board_message_ids=json.dumps(ids),
+                   board_message_id=None)
+        self._last = {k: v for k, v in self._last.items() if k[0] != gid}
+        for i, embeds in enumerate(embed_groups):
+            self._last[(gid, i)] = [e.to_dict() for e in embeds]
+
+    async def _refresh(self, guild_id):
+        async with self._locks[guild_id]:
+            row = self._get(guild_id)
+            ids = self._ids(row)
+            if not row or not row["board_channel_id"]:
                 return
-            end
 
-            -- Rare egg alerts: checked on every scan, before any of the
-            -- feed's settling/latching logic, so they are never delayed.
-            local okR, errR = pcall(checkRare, eggs)
-            if not okR then
-                warn("[EGG] rare check failed: " .. tostring(errR))
-            end
+            channel = self.bot.get_channel(row["board_channel_id"])
+            if channel is None:
+                # channel not in cache (lag / reconnect). Do NOT post new messages.
+                print(f"[EGG] board channel {row['board_channel_id']} not available, skipping")
+                return
 
-            local now = os.clock()
+            # Migrate older versions: remove the separate Last Seen message.
+            old_last_seen_id = self._last_seen_id(row)
+            if old_last_seen_id:
+                try:
+                    await channel.get_partial_message(old_last_seen_id).delete()
+                except (discord.NotFound, discord.HTTPException):
+                    pass
+                self._save(guild_id, last_seen_message_id=None)
+                row = self._get(guild_id)
 
-            -- --------------------------------------------------
-            -- NEW-CYCLE DETECTOR
-            -- Compares the current eggs with a snapshot that is at
-            -- most CYCLE_REF_SECS old. CYCLE_NEW_EGGS or more brand
-            -- new eggs = the eggs just rerolled -> start the timer.
-            -- --------------------------------------------------
-            if refIds == nil then
-                refIds, refAt = ids, now
-            else
-                local _, fresh = diffIds(refIds, ids)
+            # One message per board in BOARDS. Last Seen is rendered inside each board.
+            # If the number of saved messages doesn't match (for example after
+            # adding/removing boards), wipe and rebuild all of them.
+            if len(ids) != len(BOARDS):
+                try:
+                    await self._post_boards(channel)
+                except discord.HTTPException as e:
+                    print(f"[EGG] could not rebuild boards: {e}")
+                return
 
-                if fresh >= CYCLE_NEW_EGGS
-                    and (rerollAt == nil or now - rerollAt > CYCLE_MIN_GAP)
-                then
-                    rerollAt = now
-                    refIds, refAt = ids, now
-                    print("[EGG] new egg cycle detected")
-                elseif now - refAt >= CYCLE_REF_SECS then
-                    refIds, refAt = ids, now
-                end
-            end
-
-            if windowIds == nil then
-
-                windowIds, windowAt = ids, now
-                latched, cycleStart = copyCounts(live), now
-
-            else
-
-                local gone, fresh = diffIds(windowIds, ids)
-
-                local bigChange =
-                    gone >= RESET_IF_CHANGED
-                    or fresh >= RESET_IF_CHANGED
-
-                local locked =
-                    cycleStart ~= nil
-                    and (now - cycleStart) < REROLL_LOCKOUT
-
-                if bigChange and not locked then
-
-                    latched, cycleStart = copyCounts(live), now
-                    settling, settleStart = true, now
-                    windowIds, windowAt = ids, now
-
-                else
-
-                    for k, n in pairs(live) do
-                        if n > (latched[k] or 0) then
-                            latched[k] = n
-                        end
-                    end
-
-                    if now - windowAt >= WINDOW_SECONDS then
-                        windowIds, windowAt = ids, now
-                    end
-                end
-            end
-
-            local justSettled = false
-
-            if settling then
-
-                if zonesComplete(latched)
-                    or (now - settleStart) >= SETTLE_TIMEOUT
-                then
-                    settling, justSettled = false, true
-                else
+            embed_groups = self._embeds(row)
+            for i, embeds in enumerate(embed_groups):
+                snap = [e.to_dict() for e in embeds]
+                if self._last.get((guild_id, i)) == snap:
+                    continue  # this board didn't change, don't touch it
+                try:
+                    await channel.get_partial_message(ids[i]).edit(embeds=embeds)
+                    self._last[(guild_id, i)] = snap
+                except discord.NotFound:
+                    # a board message is gone -> rebuild all boards in order instead of adding one at the bottom
+                    print(f"[EGG] board {i + 1} was deleted, reposting all boards")
+                    try:
+                        await self._post_boards(channel)
+                    except discord.HTTPException as e:
+                        print(f"[EGG] could not repost boards: {e}")
                     return
-                end
-            end
+                except discord.HTTPException as e:
+                    # rate limit / Discord hiccup / missing permission: retry on the next update
+                    print(f"[EGG] board {i + 1} edit failed, will retry: {e}")
 
-            local latchActive =
-                LATCH_ENABLED
-                and cycleStart ~= nil
-                and (now - cycleStart) < LATCH_SECONDS
+    # ---------- receiving data from Roblox ----------
+    @commands.Cog.listener()
+    async def on_message(self, message):
+        if not message.guild or message.webhook_id is None:
+            return
+        if not message.content.startswith(FEED_PREFIX):
+            return
+        row = self._get(message.guild.id)
+        if not row or row["input_channel_id"] != message.channel.id:
+            return
 
-            local shown = latchActive and latched or live
-            local sig   = signature(shown)
+        try:
+            data = json.loads(message.content[len(FEED_PREFIX):])
+        except ValueError:
+            return
+        if not isinstance(data, dict):  # Roblox encodes an empty table as []
+            data = {}
 
-            -- Include the Dr. Scramble banner in the signature so a banner
-            -- change is sent right away instead of waiting for the heartbeat.
-            local okB, bannerName = pcall(readScramble)
-            if okB and bannerName then
-                sig = sig .. "|scramble:" .. bannerName
-            end
+        age = data.pop("_age", None)  # seconds since the current egg cycle started (not an egg)
+        scramble = data.pop("_scramble", None)  # current Dr. Scramble banner name (not an egg)
+        data.pop("_scramble_left", None)        # ignored: the bot runs its own 1 hour countdown
+        now = time.time()
+        counts = {norm(k): int(v) for k, v in data.items() if isinstance(v, (int, float))}
+        if isinstance(scramble, str) and scramble.strip():
+            sk = norm(scramble)
+            for _, keys in CATALOG["Dr Scramble"]:
+                if sk in keys:
+                    counts[keys[0]] = 1   # the active banner counts as "available"
+        self._unknown = {k: v for k, v in counts.items() if k not in ALL_KEYS}
 
-            local changed = sig ~= lastSig
-            local beat    = (now - lastSentAt) >= HEARTBEAT
+        fields = {"counts": json.dumps(counts), "updated_at": now}
+        if isinstance(age, (int, float)) and age >= 0:
+            new_end = now - age + REROLL_INTERVAL
+            old_end = row["cycle_end"]
+            # only move the timer when it really changed (a new cycle), so tiny
+            # delays don't cause an edit on every message
+            if old_end is None or abs(new_end - old_end) > DRIFT_TOLERANCE:
+                fields["cycle_end"] = new_end
 
-            if (
-                (changed or justSettled)
-                and (now - lastSentAt) >= MIN_SEND_GAP
-            ) or beat then
+        if isinstance(scramble, str) and scramble.strip():
+            new_name = scramble.strip()[:40]
+            fields["scramble"] = new_name
+            # banner changed (or first time seen) -> start a fresh 1 hour countdown
+            if row["scramble"] != new_name or row["scramble_end"] is None:
+                fields["scramble_end"] = now + SCRAMBLE_INTERVAL
+        self._save(message.guild.id, **fields)
 
-                lastSig    = sig
-                lastSentAt = now
+        # Keep the Last Seen tracker synchronized with the same feed that
+        # drives the available-egg boards. This also powers user egg alerts.
+        alerts = self.bot.get_cog("EggAlerts")
+        if alerts is not None:
+            try:
+                await alerts.on_feed(message.guild.id, counts)
+            except Exception as e:
+                print(f"[EGG] Last Seen/alert feed update failed: {e}")
 
-                sendFeed(shown, rerollAt and math.floor(now - rerollAt) or nil)
-            end
-        end)
+        self._offline[message.guild.id] = False
+        self._expired.pop(message.guild.id, None)
+        await self._refresh(message.guild.id)
 
-        task.wait(CHECK_INTERVAL)
-    end
-end)
+        try:  # keep the feed channel clean (needs Manage Messages there)
+            await message.delete()
+        except discord.HTTPException:
+            pass
 
-print("[EGG] running!")
+    @tasks.loop(seconds=30)
+    async def watchdog(self):
+        """Refresh the boards every 30 seconds so the reroll countdown bar moves."""
+        try:
+            rows = self.db.execute("SELECT * FROM egg_board WHERE board_message_ids IS NOT NULL").fetchall()
+            now = time.time()
+            for row in rows:
+                gid = row["guild_id"]
+                offline = row["updated_at"] is None or now - row["updated_at"] > OFFLINE_AFTER
+                expired = row["cycle_end"] is not None and now > row["cycle_end"]
+                self._offline[gid] = offline
+                self._expired[gid] = expired
+                await self._refresh(gid)
+        except Exception as e:
+            print(f"[EGG] watchdog error: {e}")
+
+    @watchdog.before_loop
+    async def _before_watchdog(self):
+        await self.bot.wait_until_ready()
+
+    # ---------- commands ----------
+    @commands.command(name="egginput")
+    @commands.guild_only()
+    @commands.has_permissions(administrator=True)
+    async def egginput(self, ctx):
+        """Run in the PRIVATE channel your Roblox webhook posts to."""
+        self._save(ctx.guild.id, input_channel_id=ctx.channel.id)
+        await ctx.send("✅ This channel is now the egg **feed**. Put a webhook for it in the APP.",
+                       delete_after=15)
+
+    @commands.command(name="eggdisplay")
+    @commands.guild_only()
+    @commands.has_permissions(administrator=True)
+    async def eggdisplay(self, ctx):
+        """Run in the channel where the boards should live."""
+        async with self._locks[ctx.guild.id]:
+            await self._post_boards(ctx.channel)
+        try:
+            await ctx.message.delete()
+        except discord.HTTPException:
+            pass
+
+    @commands.command(name="eggcheck")
+    @commands.guild_only()
+    @commands.has_permissions(administrator=True)
+    async def eggcheck(self, ctx):
+        row = self._get(ctx.guild.id)
+        counts = json.loads(row["counts"]) if row and row["counts"] else {}
+
+        # every zone should hold about 5 eggs (Angels/Demons up to 6). A short zone = missing names.
+        zone_lines = []
+        for zone, eggs in CATALOG.items():
+            if zone == "Dr Scramble":
+                continue
+            total = sum(counts.get(k, 0) for _, keys in eggs for k in keys)
+            flag = "✅" if total >= 5 else "⚠️ short"
+            zone_lines.append(f"{zone}: **{total}** {flag}")
+
+        unknown = sorted(self._unknown.items())
+        unknown_text = ", ".join(f"`{name}` x{n}" for name, n in unknown) or "none ✅"
+
+        by_name, by_norm = self._emoji_maps()
+        missing = [d for eggs in CATALOG.values() for d, keys in eggs
+                   if not self._emoji_for(d, keys, by_name, by_norm)[1]]
+
+        text = (
+            "**Eggs per zone** (should be 5, Angels/Demons up to 6):\n"
+            + "\n".join(zone_lines)
+            + "\n\n**Names the game sent that aren't on the board** (these are your missing eggs):\n"
+            + unknown_text
+            + "\n\n**Eggs still using the default 🥚 (no emoji set or not found):**\n"
+            + (", ".join(missing) or "none ✅")
+        )
+        await ctx.send(text[:1990])
+
+
+# ===========================================================================
+# Egg alerts / values / last-seen tracking
+# ===========================================================================
+
+PING_LIFETIME = 60        # seconds the alert ping stays before it deletes itself
+TYPO_CUTOFF = 0.55        # 0-1, lower = more forgiving when guessing a misspelled egg
+
+# ---------------------------------------------------------------------------
+# LAST SEEN seed timestamps
+# The editable times live directly in LAST_SEEN_BOARD above.
+# A value such as "2d 4h" means the egg starts 2 days 4 hours ago until
+# the live feed sees that egg.
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# VALUES  (display name as in CATALOG) -> (tier, value, thumbnail)
+# ---------------------------------------------------------------------------
+RARE = {
+    # Secret
+    "RazorFang":       ("Secret", "350M/s", _GH + "Rock_Demon.png"),
+    "Gargoyle":        ("Secret", "225M/s", _GH + "Gargoyle_Demon.png"),
+    "Centaur":         ("Secret", "350M/s", "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQmpo9iE1MHMQNyB2lCJ6QtI4O_Stz7EvDQXu6HZ2WZTw&s"),
+    "Pure Jellyfish":  ("Secret", "225M/s", "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQIXvOauCXxGctW9tMXU6YeSDuNiL8I_RxhFolmuKZy0A&s"),
+    "Mutant Shark":    ("Secret", "215M/s", "https://static.wikia.nocookie.net/stealanegg/images/e/e5/Mutant_Shark.png/revision/latest?cb=20260901190802"),
+    "Cosmic Skeleton": ("Secret", "45M/s",  "https://static.wikia.nocookie.net/stealanegg/images/9/97/Cosmic_Skeleton_Boss.png/revision/latest/scale-to-width-down/185?cb=20260904110709"),
+    "Cosmic Dragon":   ("Secret", "60M/s",  _GH + "Star_Dragon.png"),
+    "Cerberus":        ("Secret", "8M/s",   _GH + "Cerberus_Flame.png"),
+    "Kraken":          ("Secret", "15M/s",  "https://static.wikia.nocookie.net/stealanegg/images/d/d3/Kraken.png/revision/latest"),
+    "Yeti":            ("Secret", "5M/s",   _GH + "White_Yeti.png"),
+    "Tralaledon":      ("Secret", "32M/s",  _GH + "Block_Shark.png"),
+    "TRex":            ("Secret", "25M/s",  _GH + "Block_TRex.png"),
+    "Stag":            ("Secret", "145M/s",  "https://github.com/Asaiya2/steal-an-egg/blob/main/stag.webp?raw=true"),
+    # Eternal
+    "Skeleton Horse":       ("Eternal", "1.3B/s", _GH + "Skeleton_horse.png"),
+    "Pegasus":              ("Eternal", "1.3B/s", _GH + "Pegasus.png"),
+    "Oni Tiger":            ("Eternal", "600M/s", _GH + "Oni_Tiger.png"),
+    "Gorilla King":         ("Eternal", "880M/s", _GH + "Gorrila.png"),
+    "Ice Dragon":           ("Eternal", "65M/s",  _GH + "Ice_Dragon.png"),
+    "Mosasaurus":           ("Eternal", "180M/s", _GH + "Mosasaur.png"),
+    "El Maja":              ("Eternal", "130M/s", _GH + "El_maja.png"),
+    "Phoenix":              ("Eternal", "85M/s",  _GH + "phoenix.png"),
+    "Lava Dragon":          ("Eternal", "100M/s", _GH + "Lava_Dragon.png"),
+    "Eternal Lunar Dragon": ("Eternal", "250M/s", _GH + "Lunar_Dragon.png"),
+    # Divine
+    "World Burner": ("Divine", "3B/s",   _GH + "World_Burner.png"),
+    "ArchAngel":    ("Divine", "3B/s",   _GH + "ArchAngel.png"),
+    "Nightflame":   ("Divine", "3B/s",   _GH + "Nightflame.png"),
+    "Kitsune":      ("Divine", "1.8B/s", _GH + "Kitsune.png"),
+    "Unicorn":      ("Divine", "1B/s",   _GH + "Unicorn.png"),
+}
+
+TIER_STYLE = {
+    "Secret":  (0xE74C3C, "🔮"),
+    "Eternal": (0x9B59B6, "♾️"),
+    "Divine":  (0xF1C40F, "✨"),
+}
+
+# ---------------------------------------------------------------------------
+# egg lookup helpers
+# ---------------------------------------------------------------------------
+EGGS = []
+for _zone, _eggs in CATALOG.items():
+    for _display, _keys in _eggs:
+        EGGS.append({
+            "display": _display,
+            "zone": _zone,
+            "keys": _keys,
+            "first": _display.split()[0].lower(),
+            "full": _display.lower(),
+        })
+EGG_BY_DISPLAY = {e["display"]: e for e in EGGS}
+
+# text the bot can suggest: first names and full names -> how to show them
+LABELS = {}
+for _e in EGGS:
+    LABELS.setdefault(_e["first"], _e["display"].split()[0])
+    LABELS[_e["full"]] = _e["display"]
+
+
+def find_eggs(query):
+    """Returns ("ok", [egg, ...]) | ("typo", "Suggested label") | ("none", None)"""
+    q = re.sub(r"[\s_]+", " ", query or "").strip().lower()
+    qn = norm(q)
+    if not qn:
+        return "none", None
+
+    exact = [e for e in EGGS if qn in e["keys"]]          # full name (or alias) wins
+    if exact:
+        return "ok", exact
+
+    first = [e for e in EGGS if e["first"] == q]          # the egg's first name
+    if first:
+        return "ok", first
+
+    close = difflib.get_close_matches(q, list(LABELS), n=1, cutoff=TYPO_CUTOFF)
+    if close:
+        return "typo", LABELS[close[0]]
+    return "none", None
+
+
+def parse_duration(text):
+    if not text:
+        return None
+    parts = re.findall(r"(\d+)\s*([dhms])", str(text).lower())
+    if not parts:
+        return None
+    mult = {"d": 86400, "h": 3600, "m": 60, "s": 1}
+    return sum(int(n) * mult[u] for n, u in parts)
+
+
+def fmt_elapsed(seconds):
+    """12d, 1s  -  zero units are skipped"""
+    seconds = int(max(0, seconds))
+    d, r = divmod(seconds, 86400)
+    h, r = divmod(r, 3600)
+    m, s = divmod(r, 60)
+    parts = []
+    if d: parts.append(f"{d}d")
+    if h: parts.append(f"{h}h")
+    if m: parts.append(f"{m}m")
+    if s or not parts: parts.append(f"{s}s")
+    return ", ".join(parts)
+
+
+def _as_of_ts(text):
+    return datetime.strptime(text, "%Y-%m-%d %H:%M").replace(
+        tzinfo=timezone(timedelta(hours=LAST_SEEN_TZ_HOURS))).timestamp()
+
+
+_AS_OF = _as_of_ts(LAST_SEEN_AS_OF)
+HARD_TS = {}
+for _zone, _entries in LAST_SEEN_BOARD.items():
+    _base = _as_of_ts(LAST_SEEN_AS_OF_OVERRIDES[_zone]) if _zone in LAST_SEEN_AS_OF_OVERRIDES else _AS_OF
+    for _name, _txt in _entries.items():
+        _secs = parse_duration(_txt)
+        if _secs is not None:
+            HARD_TS[_name] = _base - _secs
+
+UNDERSCORE_RE = re.compile(r"^(alert|value)_(\S.*)$", re.I)
+
+
+# ---------------------------------------------------------------------------
+# MUTATE (interactive)  ->  !mutate
+# Each mutation: (multiplier, emoji, embed colour)
+# Bonuses are ADDED and each one is based on the ORIGINAL Money/s
+# (confirmed in the game's calculator: 12M with Silver + Golden
+#  = 12M x (1 + 0.2 + 1.5) = 32.4M)
+# ---------------------------------------------------------------------------
+MUTATIONS = {
+    "Silver":       (1.2,  "⚪", 0xBDC3C7),
+    "Bloom":        (1.25, "🌸", 0xFF69B4),
+    "Spirit Bloom": (2.5,  "💠", 0x3498DB),
+    "Golden":       (2.5,  "🌟", 0xF1C40F),
+    "Fractured":    (2.75, "🔮", 0x8E44AD),
+    "Scrambled":    (2.75, "🧪", 0xA3E635),
+    "Parasite":     (3.0,  "🦠", 0x27AE60),
+    "Rainbow":      (3.5,  "🌈", 0xFF6BD6),
+}
+MUTATE_DEFAULT_COLOR = 0x9B59B6
+MAX_MULT = 1 + sum(v[0] - 1 for v in MUTATIONS.values())
+
+MONEY_SUFFIXES = {"": 1, "k": 1e3, "m": 1e6, "b": 1e9, "t": 1e12,
+                  "qa": 1e15, "qi": 1e18, "sx": 1e21, "sp": 1e24}
+MONEY_RE = re.compile(r"^(\d+(?:[.,]\d+)?)\s*([a-z]{0,2})(?:/s)?$", re.I)
+
+
+def parse_money(text):
+    """'30B' -> 3e10, '1.5t/s' -> 1.5e12, None if invalid"""
+    m = MONEY_RE.match(text.strip())
+    if not m or m.group(2).lower() not in MONEY_SUFFIXES:
+        return None
+    return float(m.group(1).replace(",", ".")) * MONEY_SUFFIXES[m.group(2).lower()]
+
+
+def money_fmt(value, per_second=True):
+    tail = "/s" if per_second else ""
+    for suffix, size in (("Sp", 1e24), ("Sx", 1e21), ("Qi", 1e18), ("Qa", 1e15),
+                         ("T", 1e12), ("B", 1e9), ("M", 1e6), ("K", 1e3)):
+        if value >= size:
+            return f"{value / size:.2f}".rstrip("0").rstrip(".") + f"{suffix}{tail}"
+    return f"{value:.2f}".rstrip("0").rstrip(".") + tail
+
+
+def stack_multiplier(names):
+    return 1 + sum(MUTATIONS[n][0] - 1 for n in names)
+
+
+def boost_bar(mult, width=10):
+    filled = max(1, round(width * (mult - 1) / (MAX_MULT - 1)))
+    filled = min(width, filled)
+    return "▰" * filled + "▱" * (width - filled)
+
+
+class MutateModal(discord.ui.Modal, title="Mutate"):
+    money = discord.ui.TextInput(label="Enter egg's Money/s", placeholder="10M/10B/10T", max_length=20)
+
+    def __init__(self, view):
+        super().__init__()
+        self.view = view
+        if view.base:
+            self.money.default = money_fmt(view.base, per_second=False)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        value = parse_money(self.money.value)
+        if value is None or value <= 0:
+            return await interaction.response.send_message(
+                "Enter a Money/s value like `30B`, `250M` or `1.5T`.", ephemeral=True)
+        self.view.base = value
+        self.view.result = None
+        await self.view.refresh(interaction)
+
+
+class MutateView(discord.ui.View):
+    def __init__(self, owner_id):
+        super().__init__(timeout=300)
+        self.owner_id = owner_id
+        self.base = None
+        self.chosen = []
+        self.result = None      # (multiplier, final money/s)
+        self.message = None
+        self._sync_select()
+
+    # ---------- plumbing ----------
+    async def interaction_check(self, interaction):
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message("This box isn't yours. Run `!mutate` yourself.",
+                                                    ephemeral=True)
+            return False
+        return True
+
+    async def on_timeout(self):
+        for child in self.children:
+            child.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+
+    def _sync_select(self):
+        """Keep the dropdown ticks in sync with self.chosen."""
+        self.pick.options = [
+            discord.SelectOption(label=n, description=f"x{v[0]:g} multiplier", emoji=v[1],
+                                 default=(n in self.chosen))
+            for n, v in MUTATIONS.items()
+        ]
+
+    async def refresh(self, interaction):
+        self._sync_select()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    # ---------- the box ----------
+    def build_embed(self):
+        top = max(self.chosen, key=lambda n: MUTATIONS[n][0]) if self.chosen else None
+        embed = discord.Embed(title="🧬  Mutate",
+                              colour=MUTATIONS[top][2] if top else MUTATE_DEFAULT_COLOR)
+        embed.set_author(name="Mutation Calculator")
+        embed.set_thumbnail(url=DEFAULT_BANNER)
+
+        s1 = "✅" if self.base else "⬜"
+        s2 = "✅" if self.chosen else "⬜"
+        s3 = "✅" if self.result else "⬜"
+        embed.description = f"{s1} **Money/s**  ›  {s2} **Mutations**  ›  {s3} **Calculate**"
+
+        embed.add_field(name="💰 Money/s",
+                        value=f"**{money_fmt(self.base)}**" if self.base else "*not set*", inline=True)
+        embed.add_field(name="🧪 Mutations",
+                        value="  ".join(f"{MUTATIONS[n][1]} **{n}**" for n in self.chosen)
+                        or "*none selected*", inline=True)
+
+        if self.result:
+            mult, final = self.result
+            lines = [f"{MUTATIONS[n][1]} **{n}** ×{MUTATIONS[n][0]:g}  ➜  `+{money_fmt(self.base * (MUTATIONS[n][0] - 1))}`"
+                     for n in self.chosen]
+            embed.add_field(name="✨ Breakdown", value="\n".join(lines), inline=False)
+            embed.add_field(name="📈 Result",
+                            value=f"```{money_fmt(final)}```{boost_bar(mult)}  **x{mult:g} boost**",
+                            inline=False)
+            embed.add_field(name="⏱️ Per minute", value=f"**{money_fmt(final * 60, False)}**", inline=True)
+            embed.add_field(name="🕒 Per hour", value=f"**{money_fmt(final * 3600, False)}**", inline=True)
+            embed.set_footer(text=f"{money_fmt(self.base)} × {mult:g}  •  bonuses add up from the original")
+        else:
+            embed.set_footer(text="1.) Enter the [Sell] zone  •  2.) Press [Eggs]  •  3.) input Egg's M/s")
+        return embed
+
+    # ---------- controls ----------
+    @discord.ui.button(label="Enter Money/s", style=discord.ButtonStyle.primary, emoji="💰", row=0)
+    async def enter(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(MutateModal(self))
+
+    @discord.ui.button(label="Calculate", style=discord.ButtonStyle.success, emoji="🧮", row=0)
+    async def calc(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.base:
+            return await interaction.response.send_message(
+                "Press **Enter Money/s** first.", ephemeral=True)
+        if not self.chosen:
+            return await interaction.response.send_message(
+                "Pick at least one mutation first.", ephemeral=True)
+        mult = stack_multiplier(self.chosen)
+        self.result = (mult, self.base * mult)
+        await self.refresh(interaction)
+
+    @discord.ui.button(label="Reset", style=discord.ButtonStyle.secondary, emoji="🔄", row=0)
+    async def reset(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.base, self.chosen, self.result = None, [], None
+        await self.refresh(interaction)
+
+    @discord.ui.select(placeholder="Choose the egg's mutations (pick all that apply)",
+                       min_values=0, max_values=len(MUTATIONS),
+                       options=[discord.SelectOption(label=n) for n in MUTATIONS], row=1)
+    async def pick(self, interaction: discord.Interaction, select: discord.ui.Select):
+        self.chosen = list(select.values)
+        self.result = None
+        await self.refresh(interaction)
+
+
+# ---------------------------------------------------------------------------
+# LAST SEEN box  ->  !ls
+# Divine / Eternal / Secret buttons. Eggs are sorted by value, highest first.
+# ---------------------------------------------------------------------------
+def _rare_value(display):
+    return parse_money(RARE[display][1]) or 0
+
+
+class LastSeenView(discord.ui.View):
+    def __init__(self, cog, guild_id, owner_id):
+        super().__init__(timeout=300)
+        self.cog = cog
+        self.guild_id = guild_id
+        self.owner_id = owner_id
+        self.tier = "Divine"
+        self.message = None
+        self._style_buttons()
+
+    async def interaction_check(self, interaction):
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message("This box isn't yours. Run `!ls` yourself.",
+                                                    ephemeral=True)
+            return False
+        return True
+
+    async def on_timeout(self):
+        for child in self.children:
+            child.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+
+    def _style_buttons(self):
+        for child in self.children:
+            child.style = (discord.ButtonStyle.primary if child.label == self.tier
+                           else discord.ButtonStyle.secondary)
+
+    def build_embed(self):
+        color, tier_emoji = TIER_STYLE[self.tier]
+
+        # The Last Seen tracker can include rare eggs that are not yet in RARE.
+        # These three are Secret eggs and already exist in CATALOG / EGG_EMOJIS.
+        secret_extra = ["King Snake", "Ice Dragon", "Stag"]
+        names = [d for d, v in RARE.items() if v[0] == self.tier]
+        if self.tier == "Secret":
+            for display in secret_extra:
+                if display not in names:
+                    names.append(display)
+
+        # Eggs with no value entry are placed after the valued eggs.
+        names.sort(key=lambda d: parse_money(RARE.get(d, (None, "0M/s", None))[1]) or 0,
+                   reverse=True)
+        live = self.cog._live_set(self.guild_id) or set()
+
+        lines = []
+        for display in names:
+            egg = EGG_BY_DISPLAY.get(display)
+            emoji = self.cog._emoji(egg) if egg else "🥚"
+            if display in live:
+                seen = "🟢 **Available now**"
+            else:
+                ts = self.cog._last_seen_ts(self.guild_id, display)
+                seen = f"<t:{int(ts)}:R>" if ts is not None else "No data yet"
+            lines.append(f"{emoji} **{display}**  —  {seen}")
+
+        embed = discord.Embed(title=f"{tier_emoji}  {self.tier} eggs", colour=color,
+                              description="\n".join(lines) or "*No eggs in this tier.*")
+        embed.set_author(name="Last Seen Tracker")
+        embed.set_footer(text=f"{len(names)} eggs  •  highest value first")
+        return embed
+
+    async def switch(self, interaction, tier):
+        self.tier = tier
+        self._style_buttons()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    @discord.ui.button(label="Divine", emoji="✨")
+    async def divine(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.switch(interaction, "Divine")
+
+    @discord.ui.button(label="Eternal", emoji="♾️")
+    async def eternal(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.switch(interaction, "Eternal")
+
+    @discord.ui.button(label="Secret", emoji="🔮")
+    async def secret(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.switch(interaction, "Secret")
+
+
+class EggAlerts(commands.Cog):
+    def __init__(self, bot):
+        self.bot = bot
+        self.db = sqlite3.connect(DB_PATH)
+        self.db.execute(
+            """CREATE TABLE IF NOT EXISTS egg_alerts (
+                   guild_id INTEGER, user_id INTEGER, egg TEXT, created_at REAL,
+                   PRIMARY KEY (guild_id, user_id, egg))""")
+        self.db.execute(
+            """CREATE TABLE IF NOT EXISTS egg_last_seen (
+                   guild_id INTEGER, egg TEXT, seen_at REAL,
+                   PRIMARY KEY (guild_id, egg))""")
+        self.db.commit()
+        self._prev = {}   # guild_id -> set of egg display names that were live in the previous feed
+
+    async def cog_unload(self):
+        self.db.close()
+
+    # ---------- small helpers ----------
+    def _egg_cog(self):
+        return self.bot.get_cog("EggStatus")
+
+    def _row(self, guild_id):
+        cog = self._egg_cog()
+        return cog._get(guild_id) if cog else None
+
+    def _board_channel(self, guild_id):
+        row = self._row(guild_id)
+        if not row or not row["board_channel_id"]:
+            return None
+        return self.bot.get_channel(row["board_channel_id"])
+
+    @staticmethod
+    def _live_from(counts):
+        return {e["display"] for e in EGGS if any(counts.get(k, 0) > 0 for k in e["keys"])}
+
+    def _live_set(self, guild_id):
+        """Eggs live right now, or None if the feed is offline / has no data."""
+        row = self._row(guild_id)
+        if not row or not row["counts"] or not row["updated_at"]:
+            return None
+        if time.time() - row["updated_at"] > OFFLINE_AFTER:
+            return None
+        return self._live_from(json.loads(row["counts"]))
+
+    def _emoji(self, egg):
+        try:
+            cog = self._egg_cog()
+            by_name, by_norm = cog._emoji_maps()
+            return cog._emoji_for(egg["display"], egg["keys"], by_name, by_norm)[0]
+        except Exception:
+            return "🥚"
+
+    def _last_seen_ts(self, guild_id, display):
+        vals = []
+        if display in HARD_TS:
+            vals.append(HARD_TS[display])
+        r = self.db.execute("SELECT seen_at FROM egg_last_seen WHERE guild_id = ? AND egg = ?",
+                            (guild_id, display)).fetchone()
+        if r:
+            vals.append(r[0])
+        return max(vals) if vals else None
+
+    def _seen_text(self, guild_id, egg):
+        live = self._live_set(guild_id)
+        if live and egg["display"] in live:
+            return "🟢 **Available now**"
+        ts = self._last_seen_ts(guild_id, egg["display"])
+        if ts is None:
+            return "No data yet"
+        # <t:..:R> keeps counting up on its own in Discord; the code text is the exact time when sent
+        return f"**<t:{int(ts)}:R>**\n`{fmt_elapsed(time.time() - ts)}`"
+
+    @staticmethod
+    def _ambiguous_text(query, eggs):
+        names = ", ".join(f"**{e['display']}**" for e in eggs)
+        example = eggs[0]["display"].replace(" ", "_")
+        return (f'More than one egg matches "{query}": {names}.\n'
+                f"Use the full name, e.g. `!alert_{example}`")
+
+    # ---------- feed hook (called from EggStatus.on_message) ----------
+    async def on_feed(self, guild_id, counts):
+        live = self._live_from(counts)
+        prev = self._prev.get(guild_id)
+        self._prev[guild_id] = live
+
+        now = time.time()
+        # Record the time an egg FIRST appears in a cycle, not every feed tick.
+        # On startup, currently-live eggs become the new baseline and reset to now.
+        appeared = live if prev is None else (live - prev)
+        if appeared:
+            self.db.executemany("INSERT OR REPLACE INTO egg_last_seen (guild_id, egg, seen_at) VALUES (?, ?, ?)",
+                                [(guild_id, d, now) for d in appeared])
+            self.db.commit()
+
+        if prev is None:      # first data since the bot started = baseline, don't ping
+            return
+        channel = self._board_channel(guild_id)
+        if channel is None:
+            return
+
+        for display in live - prev:   # eggs that just appeared
+            rows = self.db.execute("SELECT user_id FROM egg_alerts WHERE guild_id = ? AND egg = ?",
+                                   (guild_id, display)).fetchall()
+            if not rows:
+                continue
+            mentions = " ".join(f"<@{r[0]}>" for r in rows)
+            emoji = self._emoji(EGG_BY_DISPLAY[display])
+            try:
+                await channel.send(f"🔔 {mentions} - {emoji} **{display}** is available now!",
+                                   delete_after=PING_LIFETIME,
+                                   allowed_mentions=discord.AllowedMentions(users=True))
+            except discord.HTTPException as e:
+                print(f"[EGG] alert ping failed: {e}")
+                continue
+            self.db.execute("DELETE FROM egg_alerts WHERE guild_id = ? AND egg = ?", (guild_id, display))
+            self.db.commit()
+
+    # ---------- command logic (shared by !alert x and !alert_x) ----------
+    async def _handle_alert(self, channel, guild, author, query):
+        if not query:
+            await channel.send("Usage: `!alert_penguin`")
+            return
+        status, data = find_eggs(query)
+        if status == "none":
+            await channel.send(f'I couldn\'t find an egg called "{query}". alert not created.')
+            return
+        if status == "typo":
+            await channel.send(f'Did you misspell "{data}"? alert not created.')
+            return
+        if len(data) > 1:
+            await channel.send(self._ambiguous_text(query, data) + "\nalert not created.")
+            return
+
+        egg = data[0]
+        display = egg["display"]
+        cur = self.db.execute(
+            "INSERT OR IGNORE INTO egg_alerts (guild_id, user_id, egg, created_at) VALUES (?, ?, ?, ?)",
+            (guild.id, author.id, display, time.time()))
+        self.db.commit()
+        if cur.rowcount == 0:
+            await channel.send(f"{author.mention} you already have an alert for **{display}**.")
+            return
+
+        board = self._board_channel(guild.id)
+        where = board.mention if board else "the egg board channel"
+        msg = f"🔔 Rest assured {author.mention}, I will ping you when **{display}** is available in {where}"
+        if display in (self._live_set(guild.id) or set()):
+            msg += "\n*(It's live right now, so I'll ping you the next time it shows up.)*"
+        await channel.send(msg)
+
+    async def _handle_value(self, channel, guild, query):
+        if not query:
+            await channel.send("Usage: `!value_kraken`")
+            return
+        status, data = find_eggs(query)
+        if status == "none":
+            await channel.send(f'I couldn\'t find an egg called "{query}".')
+            return
+        if status == "typo":
+            await channel.send(f'Did you misspell "{data}"?')
+            return
+
+        rares = [e for e in data if e["display"] in RARE]
+        if not rares:
+            await channel.send("Only secrets, eternal and divine eggs have values.")
+            return
+        if len(rares) > 1:
+            await channel.send(self._ambiguous_text(query, rares).replace("!alert_", "!value_"))
+            return
+
+        egg = rares[0]
+        tier, value, image = RARE[egg["display"]]
+        color, tier_emoji = TIER_STYLE[tier]
+        embed = discord.Embed(title=f"{tier_emoji}  {egg['display']} Egg  {tier_emoji}", colour=color)
+        embed.add_field(name="🥚 Egg", value=f"**{egg['display']} Egg**", inline=True)
+        embed.add_field(name="💎 Rarity", value=f"**{tier}**", inline=True)
+        embed.add_field(name="🕒 Last Seen", value=self._seen_text(guild.id, egg), inline=True)
+        embed.add_field(name="💰 EGG VALUE", value=f"```{value}```", inline=False)
+        if image:
+            embed.set_thumbnail(url=image)
+        await channel.send(embed=embed)
+
+    # ---------- commands: "!alert penguin" ----------
+    async def _configured(self, ctx):
+        if self._row(ctx.guild.id) is None or self._board_channel(ctx.guild.id) is None:
+            await ctx.send("The egg board isn't set up in this server yet (an admin needs to run `!eggdisplay`).")
+            return False
+        return True
+
+    @commands.command(name="alert")
+    @commands.guild_only()
+    async def alert(self, ctx, *, egg: str = ""):
+        """!alert penguin - ping me when the egg is available"""
+        if await self._configured(ctx):
+            await self._handle_alert(ctx.channel, ctx.guild, ctx.author, egg)
+
+    @commands.command(name="value", aliases=["val", "v"])
+    @commands.guild_only()
+    async def value(self, ctx, *, egg: str = ""):
+        """!value kraken - value of a Secret / Eternal / Divine egg"""
+        if await self._configured(ctx):
+            await self._handle_value(ctx.channel, ctx.guild, egg)
+
+    @commands.command(name="mutate", aliases=["calc", "mutation"])
+    @commands.guild_only()
+    async def mutate(self, ctx):
+        """!mutate - interactive Money/s calculator"""
+        view = MutateView(ctx.author.id)
+        view.message = await ctx.send(embed=view.build_embed(), view=view)
+
+    @commands.command(name="ls", aliases=["last_seen", "lastseen", "last"])
+    @commands.guild_only()
+    async def ls(self, ctx):
+        """!ls - last seen times for Divine / Eternal / Secret eggs"""
+        view = LastSeenView(self, ctx.guild.id, ctx.author.id)
+        view.message = await ctx.send(embed=view.build_embed(), view=view)
+
+    # ---------- "!alert_penguin" style ----------
+    @commands.Cog.listener()
+    async def on_message(self, message):
+        if message.author.bot or not message.guild:
+            return
+        prefix = self.bot.command_prefix
+        if not isinstance(prefix, str) or not message.content.startswith(prefix):
+            return
+        m = UNDERSCORE_RE.match(message.content[len(prefix):].strip())
+        if not m:
+            return
+        if self._row(message.guild.id) is None or self._board_channel(message.guild.id) is None:
+            return  # only servers where !eggdisplay was run
+
+        cmd, arg = m.group(1).lower(), m.group(2)
+        if cmd == "alert":
+            await self._handle_alert(message.channel, message.guild, message.author, arg)
+        elif cmd == "value":
+            await self._handle_value(message.channel, message.guild, arg)
+
+
+
+async def setup(bot):
+    await bot.add_cog(EggStatus(bot))
+    await bot.add_cog(EggAlerts(bot))
+
