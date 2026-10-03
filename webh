@@ -206,7 +206,7 @@ local EGG_NAMES = {
 local SECRETS = {
     "razorfang", "gargoyle", "centaur", "pure jellyfish", "mutant shark",
     "cosmic skeleton", "cosmic dragon", "cerberus", "kraken", "yeti",
-    "tralaledon", "trex",
+    "tralaledon", "trex", "stag",
 }
 
 local ETERNALS = {
@@ -225,7 +225,7 @@ local DIVINES = {
 
 local EGG_IMAGES = {
     ["kitsune"]      = "https://asaiya2.github.io/steal-an-egg/Kitsune.png",
-    ["nightflame"]   = "https://asaiya2.github.io/steal-an-egg/Nightflame.png",
+    ["nightflame"]   = "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcShvM3kxpF7zv1Vh9TACxdrUFdUFTE5Tw_RX0kUcJlrKQ&s",
     ["world burner"] = "https://asaiya2.github.io/steal-an-egg/World_Burner.png",
     ["archangel"]    = "https://asaiya2.github.io/steal-an-egg/ArchAngel.png",
     ["unicorn"]      = "https://asaiya2.github.io/steal-an-egg/Unicorn.png",
@@ -243,7 +243,6 @@ local EGG_IMAGES = {
 
     ["razorfang"]      = "https://asaiya2.github.io/steal-an-egg/Rock_Demon.png",
     ["gargoyle"]       = "https://asaiya2.github.io/steal-an-egg/Gargoyle_Demon.png",
-    ["stag"]       = "https://github.com/Asaiya2/steal-an-egg/blob/main/stag.webp?raw=true",
     ["centaur"]        = "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQmpo9iE1MHMQNyB2lCJ6QtI4O_Stz7EvDQXu6HZ2WZTw&s",
     ["pure jellyfish"] = "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQIXvOauCXxGctW9tMXU6YeSDuNiL8I_RxhFolmuKZy0A&s",
     ["mutant shark"]   = "https://static.wikia.nocookie.net/stealanegg/images/e/e5/Mutant_Shark.png/revision/latest?cb=20260901190802",
@@ -254,6 +253,7 @@ local EGG_IMAGES = {
     ["yeti"]           = "https://asaiya2.github.io/steal-an-egg/White_Yeti.png",
     ["tralaledon"]     = "https://asaiya2.github.io/steal-an-egg/Block_Shark.png",
     ["trex"]           = "https://asaiya2.github.io/steal-an-egg/Block_TRex.png",
+    ["stag"]           = "https://github.com/Asaiya2/steal-an-egg/blob/main/stag.webp?raw=true",
 }
 
 
@@ -262,36 +262,36 @@ local EGG_IMAGES = {
 -- ============================================================
 
 local EGG_VALUES = {
-    ["kitsune"]      = "1.8B/s",
-    ["nightflame"]   = "3B/s",
-    ["world burner"] = "5B/s",
-    ["archangel"]    = "3B/s",
-    ["unicorn"]      = "1B/s",
+    ["kitsune"]      = "1.8B/s • BASE VALUE",
+    ["nightflame"]   = "3B/s • BASE VALUE",
+    ["world burner"] = "5B/s • BASE VALUE",
+    ["archangel"]    = "3B/s • BASE VALUE",
+    ["unicorn"]      = "1B/s • BASE VALUE",
 
-    ["skeleton horse"]       = "1.3B/s",
-    ["pegasus"]              = "1.3B/s",
-    ["oni tiger"]            = "600M/s",
-    ["gorilla king"]         = "880M/s",
-    ["ice dragon"]           = "65M/s",
-    ["mosasaurus"]           = "180M/s",
-    ["el maja"]              = "130M/s",
-    ["phoenix"]              = "85M/s",
-    ["lava dragon"]          = "100M/s",
-    ["eternal lunar dragon"] = "250M/s",
+    ["skeleton horse"]       = "1.3B/s • BASE VALUE",
+    ["pegasus"]              = "1.3B/s • BASE VALUE",
+    ["oni tiger"]            = "600M/s • BASE VALUE",
+    ["gorilla king"]         = "880M/s • BASE VALUE",
+    ["ice dragon"]           = "65M/s • BASE VALUE",
+    ["mosasaurus"]           = "180M/s • BASE VALUE",
+    ["el maja"]              = "130M/s • BASE VALUE",
+    ["phoenix"]              = "85M/s • BASE VALUE",
+    ["lava dragon"]          = "100M/s • BASE VALUE",
+    ["eternal lunar dragon"] = "250M/s • BASE VALUE",
 
-    ["razorfang"]       = "350M/s",
-    ["gargoyle"]        = "225M/s",
-    ["gargoyle"]        = "145M/s",
-    ["centaur"]         = "350M/s",
-    ["pure jellyfish"]  = "225M/s",
-    ["mutant shark"]    = "215M/s",
-    ["cosmic skeleton"] = "45M/s",
-    ["cosmic dragon"]   = "60M/s",
-    ["cerberus"]        = "8M/s",
-    ["kraken"]          = "15M/s",
-    ["yeti"]            = "5M/s",
-    ["tralaledon"]      = "32M/s",
-    ["trex"]            = "25M/s",
+    ["razorfang"]       = "350M/s • BASE VALUE",
+    ["gargoyle"]        = "225M/s • BASE VALUE",
+    ["centaur"]         = "350M/s • BASE VALUE",
+    ["pure jellyfish"]  = "225M/s • BASE VALUE",
+    ["mutant shark"]    = "215M/s • BASE VALUE",
+    ["cosmic skeleton"] = "45M/s • BASE VALUE",
+    ["cosmic dragon"]   = "60M/s • BASE VALUE",
+    ["cerberus"]        = "8M/s • BASE VALUE",
+    ["kraken"]          = "15M/s • BASE VALUE",
+    ["yeti"]            = "5M/s • BASE VALUE",
+    ["tralaledon"]      = "32M/s • BASE VALUE",
+    ["trex"]            = "25M/s • BASE VALUE",
+    ["stag"]           = "145M/s • BASE VALUE VALUE",
 }
 
 
