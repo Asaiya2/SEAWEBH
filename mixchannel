@@ -354,7 +354,7 @@ local EGG_VALUES = {
 
     -- Enchanted Forest: replace "VALUE NOT SET" with the real value (e.g. "1.5B/s").
     ["starry fox"]        = "500M/s",
-    ["celestial sunlion"] = "Will set later after waking up",
+    ["celestial sunlion"] = "2B/s",
     ["royal skywhale"]    = "Will set later after waking up",
 }
 
