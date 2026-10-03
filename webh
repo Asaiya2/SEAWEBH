@@ -219,6 +219,7 @@ local EGG_NAMES = {
         ["Royal Skywhale"]    = "royal skywhale",
         ["Celestial Sunlion"] = { "celestial sunlion", "cosmic lion" },
         ["Starry Fox"]        = { "starry fox", "cosmic fox" },
+        ["Rainbow Amethyst Runebear"] = "rainbow amethyst runebear",
         ["Astral Jackalope"]  = { "astral jackalope", "spirit hare" },
         ["Spirit Panda"]      = "spirit panda",
         ["Enchanted Bluejay"] = "enchanted bluejay",
@@ -246,7 +247,7 @@ local SECRETS = {
     "razorfang", "gargoyle", "centaur", "pure jellyfish", "mutant shark",
     "cosmic skeleton", "cosmic dragon", "cerberus", "kraken", "yeti",
     "tralaledon", "trex", "stag",
-    "starry fox",
+    "starry fox", "rainbow amethyst runebear",
 }
 
 local ETERNALS = {
@@ -299,6 +300,7 @@ local EGG_IMAGES = {
     -- Enchanted Forest: paste an image link in place of "link here".
     -- While it says "link here" the alert is sent without a thumbnail.
     ["starry fox"]        = "link here",
+    ["rainbow amethyst runebear"] = "link here",
     ["celestial sunlion"] = "link here",
     ["royal skywhale"]    = "link here",
 }
@@ -340,9 +342,10 @@ local EGG_VALUES = {
     ["trex"]            = "25M/s",
 
     -- Enchanted Forest: replace "VALUE NOT SET" with the real value (e.g. "1.5B/s").
-    ["starry fox"]        = "500M/s",
-    ["celestial sunlion"] = "Will set later after waking up",
-    ["royal skywhale"]    = "Will set later after waking up",
+    ["starry fox"]        = "VALUE NOT SET",
+    ["rainbow amethyst runebear"] = "VALUE NOT SET",
+    ["celestial sunlion"] = "VALUE NOT SET",
+    ["royal skywhale"]    = "VALUE NOT SET",
 }
 
 
