@@ -55,6 +55,19 @@ local DEBUG_PRINT = false
 -- Sends 3 sample alerts (Divine / Eternal / Secret) when the script starts.
 local TEST_MODE = false
 
+-- ---------- Dr Scramble banner alerts ----------
+local SCRAMBLE_ALERTS         = true
+local SCRAMBLE_ON_START       = true   -- alert the banner that's already active when the script starts
+local SCRAMBLE_WEBHOOK        = WEBHOOKS.Divine  -- change to a different webhook URL if you want a separate channel
+local SCRAMBLE_ROLE_ID        = ""     -- optional role to ping, e.g. "123456789"; leave "" for no ping
+local SCRAMBLE_CHECK_INTERVAL = 2
+
+local SCRAMBLE_IMAGES = {
+    ["unstable"]     = "https://github.com/Asaiya2/steal-an-egg/blob/main/unstable.png?raw=true",
+    ["experimental"] = "https://github.com/Asaiya2/steal-an-egg/blob/main/experimental.png?raw=true",
+    ["biohazard"]    = "https://github.com/Asaiya2/steal-an-egg/blob/main/biohazard.png?raw=true",
+}
+
 
 -- ============================================================
 -- EGG NAMES
@@ -984,6 +997,103 @@ local function readScramble()
     end
 
     return name, left
+end
+
+
+-- ============================================================
+-- DR. SCRAMBLE ALERT (same look as the rare egg alerts)
+-- ============================================================
+
+local function sendScrambleEmbed(bannerName, secondsLeft)
+    local now = os.time()
+    local lower = bannerName:lower()
+
+    local imageUrl
+    for key, url in pairs(SCRAMBLE_IMAGES) do
+        if lower:find(key, 1, true) then
+            imageUrl = url
+            break
+        end
+    end
+
+    local fields = {
+        { name = "🧪 Banner",   value = "**" .. bannerName .. "**",   inline = true },
+        { name = "🟢 Status",   value = "**Active**",                 inline = true },
+        { name = "⏱️ Changed",  value = "**<t:" .. now .. ":R>**",    inline = true },
+    }
+
+    if secondsLeft then
+        local nextAt = now + secondsLeft
+        fields[#fields + 1] = {
+            name   = "🔄 Next Change",
+            value  = "**<t:" .. nextAt .. ":t>** (<t:" .. nextAt .. ":R>)",
+            inline = false,
+        }
+    end
+
+    fields[#fields + 1] = {
+        name   = "🎮 Join Game",
+        value  = "[Click Here](https://www.roblox.com/games/start?placeId=" .. tostring(game.PlaceId) .. ")",
+        inline = false,
+    }
+
+    local embed = {
+        title       = "🧪  DR. SCRAMBLE BANNER ACTIVE  🧪",
+        description = "*" .. bannerName .. " is now active!*",
+        color       = 0x2ECC71,
+        fields      = fields,
+        footer      = { text = "https://discord.gg/W0RST • Dr Scramble Alert" },
+        timestamp   = os.date("!%Y-%m-%dT%H:%M:%SZ", now),
+    }
+
+    if imageUrl then
+        embed.thumbnail = { url = imageUrl }
+    end
+
+    local mention = (SCRAMBLE_ROLE_ID ~= "") and ("<@&" .. SCRAMBLE_ROLE_ID .. "> ") or ""
+
+    postWebhook(SCRAMBLE_WEBHOOK, {
+        username   = BOT_NAME,
+        avatar_url = (BOT_AVATAR ~= "") and BOT_AVATAR or nil,
+        content    = mention .. "🧪 **" .. bannerName .. "** is now active!",
+        allowed_mentions = { parse = { "roles" } },
+        embeds     = { embed },
+    }, true)
+end
+
+if SCRAMBLE_ALERTS then
+    task.spawn(function()
+        local lastSent, pending, pendingCount = nil, nil, 0
+        local first = true
+
+        while true do
+            local ok, name, left = pcall(readScramble)
+
+            if ok and name then
+                if name == lastSent then
+                    pending, pendingCount = nil, 0
+                elseif name == pending then
+                    pendingCount = pendingCount + 1
+                else
+                    pending, pendingCount = name, 1
+                end
+
+                -- must be read twice in a row, so a GUI that is still loading can't cause a false alert
+                if pending and pendingCount >= 2 then
+                    lastSent = pending
+                    pending, pendingCount = nil, 0
+
+                    if SCRAMBLE_ON_START or not first then
+                        pcall(sendScrambleEmbed, lastSent, left)
+                        print("[EGG] Dr Scramble banner:", lastSent)
+                    end
+                    first = false
+                end
+            end
+
+            task.wait(SCRAMBLE_CHECK_INTERVAL)
+        end
+    end)
 end
 
 
