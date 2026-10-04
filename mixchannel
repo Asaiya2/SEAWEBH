@@ -339,14 +339,16 @@ local EGG_VALUES = {
     ["tralaledon"]      = "32M/s",
     ["trex"]            = "25M/s",
 
-
+    -- Enchanted Forest: replace "VALUE NOT SET" with the real value (e.g. "1.5B/s").
     ["starry fox"]        = "500M/s",
     ["celestial sunlion"] = "2B/s",
     ["royal skywhale"]    = "Will set later after waking up",
 }
 
 
-
+-- ============================================================
+-- ROLE IDS
+-- ============================================================
 
 local ROLE_IDS = {
     Secret  = "1552345277459988480",
@@ -355,7 +357,9 @@ local ROLE_IDS = {
 }
 
 
-
+-- ============================================================
+-- WEBHOOK STYLES
+-- ============================================================
 
 local STYLE = {
     Secret  = { color = 0xE74C3C, emoji = "🔮", title = "SECRET EGG SPAWNED",  tag = "A Hidden Egg has appeared!" },
@@ -367,7 +371,9 @@ local BOT_NAME   = "WORST • Steal An Egg"
 local BOT_AVATAR = "https://github.com/Asaiya2/steal-an-egg/blob/main/neW.png?raw=true"
 
 
-
+-- ============================================================
+-- SHARED
+-- ============================================================
 
 local HttpService = game:GetService("HttpService")
 local RS          = game:GetService("ReplicatedStorage")
