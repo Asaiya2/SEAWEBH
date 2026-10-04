@@ -1,6 +1,6 @@
-print("Running egg script")
+print("Running egg script Forest - Cherry + Butterfly Bloom")
 -- ============================================================
---  RARE EGG NOTIFIER + BOT FEED
+--  RARE EGG NOTIFIER + BOT FEED + BUTTERFLY BLOOM ALERT
 --  Rare egg alerts now come from scanning the game's eggs
 --  (same source as the board feed). No chat detection.
 -- ============================================================
@@ -14,8 +14,17 @@ local WEBHOOKS = {
     Divine  = "https://discord.com/api/webhooks/1556086398136746057/lX4lKeT5phqA0Ve7e4ctIpEHQAQya1zgUmNjMkXdJdHmnpb4A6lTiBonN_txMpxJkQOG",
 }
 
+-- Butterfly Bloom event alert
+local BUTTERFLY_WEBHOOK  = "https://discord.com/api/webhooks/1556086398136746057/lX4lKeT5phqA0Ve7e4ctIpEHQAQya1zgUmNjMkXdJdHmnpb4A6lTiBonN_txMpxJkQOG"
+local BUTTERFLY_ROLE_ID  = "1556173039224225812"
+local BUTTERFLY_EVENT    = "ButterflyBloom"
+local BUTTERFLY_COOLDOWN = 600   -- seconds between alerts
+local BUTTERFLY_DEFAULT_DURATION = 300
+local BUTTERFLY_IMAGE    = "https://img.magnific.com/free-vector/butterfly-realistic-isolated_1284-3881.jpg?semt=ais_hybrid&w=740&q=80"
+
 -- Webhook of your PRIVATE feed channel (the one you ran !egginput in)
-local FEED_WEBHOOK = " "
+local FEED_WEBHOOK = "https://discord.com/api/webhooks/1554004883353632790/pveRQ_8LBUr5Tlxj34EBtO7Ruua8mvfIACa5QfvhgoUhc6rUw2hgI2VYDltxzmzmznx_"
+
 
 -- ===================== SETTINGS =====================
 
@@ -25,7 +34,7 @@ local HEARTBEAT         = 60
 local IGNORE_FIRST_AREA = false
 
 local LATCH_ENABLED  = true
-local LATCH_SECONDS  = 290
+local LATCH_SECONDS  = 302
 
 local RESET_IF_CHANGED = 10
 local WINDOW_SECONDS   = 3
@@ -52,7 +61,7 @@ local SHOW_LOCATION           = true   -- adds the zone (Forest, Cosmic...) to t
 -- Turn this on while Dr Scramble eggs are spawned to see their exact names.
 local DEBUG_PRINT = false
 
--- Sends 3 sample alerts (Divine / Eternal / Secret) when the script starts.
+-- Sends 3 sample alerts (Divine / Eternal / Secret) + 1 butterfly alert when the script starts.
 local TEST_MODE = false
 
 
@@ -987,6 +996,27 @@ local function readScramble()
 end
 
 
+-- ============================================================
+-- BUTTERFLY BLOOM STATE  (NEW)
+-- Shared between the event hook (Part 3) and the feed (Part 2).
+-- Part 3 sets butterflyEndsAt when the event begins; the feed
+-- reads it so the bot knows the event is running.
+-- ============================================================
+
+local butterflyEndsAt = nil   -- os.time() when the event ends, nil = not running
+
+local function butterflyLeft()
+    if butterflyEndsAt then
+        local left = butterflyEndsAt - os.time()
+        if left > 0 then
+            return left
+        end
+        butterflyEndsAt = nil
+    end
+    return nil
+end
+
+
 -- cycleAge = seconds since the current egg cycle started (nil until a cycle
 -- has been seen). The bot uses it for the "Next update" countdown.
 local function sendFeed(counts, cycleAge)
@@ -1007,6 +1037,13 @@ local function sendFeed(counts, cycleAge)
         if scrambleLeft then
             data._scramble_left = scrambleLeft
         end
+    end
+
+    -- Butterfly Bloom (NEW): tell the bot the event is running and how long is left
+    local bLeft = butterflyLeft()
+    if bLeft then
+        data._butterfly = 1
+        data._butterfly_left = bLeft
     end
 
     local body = "EGGDATA" .. HttpService:JSONEncode(data)
@@ -1205,6 +1242,11 @@ task.spawn(function()
                 sig = sig .. "|scramble:" .. bannerName
             end
 
+            -- Butterfly Bloom (NEW): start/stop of the event is sent right away too.
+            if butterflyLeft() then
+                sig = sig .. "|butterfly:1"
+            end
+
             local changed = sig ~= lastSig
             local beat    = (now - lastSentAt) >= HEARTBEAT
 
@@ -1223,5 +1265,75 @@ task.spawn(function()
         task.wait(CHECK_INTERVAL)
     end
 end)
+
+
+-- ============================================================
+-- PART 3: BUTTERFLY BLOOM EVENT
+-- Fires when the server sends RE/LiveEvents/Began with ButterflyBloom.
+-- ============================================================
+
+local lastButterflyAt = 0
+
+local function sendButterflyEmbed(startedAt, duration)
+    local endsAt = startedAt + duration
+
+    postWebhook(BUTTERFLY_WEBHOOK, {
+        username   = BOT_NAME,
+        avatar_url = (BOT_AVATAR ~= "") and BOT_AVATAR or nil,
+        content    = "<@&" .. BUTTERFLY_ROLE_ID .. "> **Butterfly Bloom** just started!",
+        allowed_mentions = { roles = { BUTTERFLY_ROLE_ID } },
+        embeds = {{
+            title       = "🦋  BUTTERFLY BLOOM ACTIVE  🦋",
+            description = "*A swarm of butterflies roam the servers*",
+            color       = 0xFF69B4,
+            thumbnail   = { url = BUTTERFLY_IMAGE },
+            fields = {
+                { name = "🦋 Event",     value = "**Butterfly Bloom**", inline = true },
+                { name = "✅ Status",    value = "**Active**",          inline = true },
+                { name = "⏱️ Started",   value = "**<t:" .. startedAt .. ":R>**", inline = true },
+                { name = "⏳ TIME LEFT", value = "**Disappears <t:" .. endsAt .. ":R>** (<t:" .. endsAt .. ":t>)", inline = false },
+            },
+            footer    = { text = "https://discord.gg/W0RST • Secret Alert" },
+            timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ", os.time()),
+        }},
+    }, true)
+end
+
+local function onButterflyBegan(name, duration)
+    if tostring(name) ~= BUTTERFLY_EVENT then
+        return
+    end
+
+    -- NEW: remember when the event ends so the feed reports it as running.
+    -- This happens BEFORE the cooldown check so the board is always correct.
+    local dur = tonumber(duration) or BUTTERFLY_DEFAULT_DURATION
+    butterflyEndsAt = os.time() + dur
+
+    local now = os.time()
+    if now - lastButterflyAt < BUTTERFLY_COOLDOWN then
+        print("[Butterfly] skipped (cooldown)")
+        return
+    end
+    lastButterflyAt = now
+
+    sendButterflyEmbed(now, dur)
+    print("[Butterfly] alert sent")
+end
+
+local function hookButterfly(remote)
+    if remote:IsA("RemoteEvent") and remote.Name == "RE/LiveEvents/Began" then
+        remote.OnClientEvent:Connect(onButterflyBegan)
+        print("[Butterfly] hooked " .. remote:GetFullName())
+    end
+end
+
+for _, d in ipairs(RS:GetDescendants()) do hookButterfly(d) end
+RS.DescendantAdded:Connect(hookButterfly)
+
+if TEST_MODE then
+    task.delay(4, function()
+        sendButterflyEmbed(os.time(), BUTTERFLY_DEFAULT_DURATION)
+    end)
+end
 
 print("[EGG] running!")
