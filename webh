@@ -25,7 +25,7 @@ local HEARTBEAT         = 60
 local IGNORE_FIRST_AREA = false
 
 local LATCH_ENABLED  = true
-local LATCH_SECONDS  = 305
+local LATCH_SECONDS  = 302
 
 local RESET_IF_CHANGED = 10
 local WINDOW_SECONDS   = 3
