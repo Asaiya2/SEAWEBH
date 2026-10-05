@@ -1,5 +1,5 @@
-wait(20)
-print("Running egg script Forest - Cherry + Butterfly Bloom")
+wait(10)
+print("ADDED IMAGES FOR NEW BIOME")
 -- ============================================================
 --  RARE EGG NOTIFIER + BOT FEED + BUTTERFLY BLOOM ALERT
 --  Rare egg alerts now come from scanning the game's eggs
