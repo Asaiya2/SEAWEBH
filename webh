@@ -305,7 +305,7 @@ local EGG_IMAGES = {
     ["yeti"]           = "https://asaiya2.github.io/steal-an-egg/White_Yeti.png",
     ["tralaledon"]     = "https://asaiya2.github.io/steal-an-egg/Block_Shark.png",
     ["trex"]           = "https://asaiya2.github.io/steal-an-egg/Block_TRex.png",
-    ["starry fox"]        = "https://github.com/Asaiya2/steal-an-egg/blob/main/Starry_fox.png?raw=true",
+    ["starry fox"]        = "https://asaiya2.github.io/steal-an-egg/Starry_fox.png",
 
 }
 
