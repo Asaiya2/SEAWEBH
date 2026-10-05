@@ -34,7 +34,7 @@ local HEARTBEAT         = 60
 local IGNORE_FIRST_AREA = false
 
 local LATCH_ENABLED  = true
-local LATCH_SECONDS  = 302
+local LATCH_SECONDS  = 330
 
 local RESET_IF_CHANGED = 10
 local WINDOW_SECONDS   = 3
@@ -221,9 +221,6 @@ local EGG_NAMES = {
         ["World Burner"]   = "world burner",
     },
 
-    -- Enchanted Forest.
-    -- Left side  = the name shown on the bot's board
-    -- Right side = what the game calls the egg (a list when it has older names too)
     ["Enchanted Forest"] = {
         ["Royal Skywhale"]    = "royal skywhale",
         ["Celestial Sunlion"] = { "celestial sunlion", "cosmic lion" },
@@ -280,6 +277,8 @@ local EGG_IMAGES = {
     ["world burner"] = "https://asaiya2.github.io/steal-an-egg/World_Burner.png",
     ["archangel"]    = "https://asaiya2.github.io/steal-an-egg/ArchAngel.png",
     ["unicorn"]      = "https://asaiya2.github.io/steal-an-egg/Unicorn.png",
+    ["royal skywhale"]    = "https://github.com/Asaiya2/steal-an-egg/blob/main/skywhale.png?raw=true",
+
 
     ["skeleton horse"]       = "https://asaiya2.github.io/steal-an-egg/Skeleton_horse.png",
     ["pegasus"]              = "https://asaiya2.github.io/steal-an-egg/Pegasus.png",
@@ -291,6 +290,7 @@ local EGG_IMAGES = {
     ["phoenix"]              = "https://asaiya2.github.io/steal-an-egg/phoenix.png",
     ["lava dragon"]          = "https://asaiya2.github.io/steal-an-egg/Lava_Dragon.png",
     ["eternal lunar dragon"] = "https://asaiya2.github.io/steal-an-egg/Lunar_Dragon.png",
+    ["celestial sunlion"] = "https://github.com/Asaiya2/steal-an-egg/blob/main/sunlion.png?raw=true",
 
     ["razorfang"]      = "https://asaiya2.github.io/steal-an-egg/Rock_Demon.png",
     ["gargoyle"]       = "https://asaiya2.github.io/steal-an-egg/Gargoyle_Demon.png",
@@ -304,12 +304,8 @@ local EGG_IMAGES = {
     ["yeti"]           = "https://asaiya2.github.io/steal-an-egg/White_Yeti.png",
     ["tralaledon"]     = "https://asaiya2.github.io/steal-an-egg/Block_Shark.png",
     ["trex"]           = "https://asaiya2.github.io/steal-an-egg/Block_TRex.png",
+    ["starry fox"]        = "https://github.com/Asaiya2/steal-an-egg/blob/main/Starry_fox.png?raw=true",
 
-    -- Enchanted Forest: paste an image link in place of "link here".
-    -- While it says "link here" the alert is sent without a thumbnail.
-    ["starry fox"]        = "link here",
-    ["celestial sunlion"] = "link here",
-    ["royal skywhale"]    = "link here",
 }
 
 
@@ -318,11 +314,12 @@ local EGG_IMAGES = {
 -- ============================================================
 
 local EGG_VALUES = {
-    ["kitsune"]      = "1.8B/s",
-    ["nightflame"]   = "3B/s",
-    ["world burner"] = "5B/s",
-    ["archangel"]    = "3B/s",
-    ["unicorn"]      = "1B/s",
+    ["kitsune"]          = "1.8B/s",
+    ["nightflame"]       = "3B/s",
+    ["world burner"]     = "5B/s",
+    ["archangel"]        = "3B/s",
+    ["unicorn"]          = "1B/s",
+    ["royal skywhale"]   = "8B/s",
 
     ["skeleton horse"]       = "1.3B/s",
     ["pegasus"]              = "1.3B/s",
@@ -351,7 +348,6 @@ local EGG_VALUES = {
     -- Enchanted Forest: replace "VALUE NOT SET" with the real value (e.g. "1.5B/s").
     ["starry fox"]        = "500M/s",
     ["celestial sunlion"] = "2B/s",
-    ["royal skywhale"]    = "Will set later after waking up",
 }
 
 
@@ -1186,9 +1182,10 @@ task.spawn(function()
 
                 local gone, fresh = diffIds(windowIds, ids)
 
-                local bigChange =
-                    gone >= RESET_IF_CHANGED
-                    or fresh >= RESET_IF_CHANGED
+                -- only NEW eggs appearing starts a new cycle. Eggs disappearing
+                -- (the game clears the field ~10s before the reroll) is ignored,
+                -- so the board keeps showing the old eggs until the new ones spawn.
+                local bigChange = fresh >= RESET_IF_CHANGED
 
                 local locked =
                     cycleStart ~= nil
