@@ -1,4 +1,5 @@
-print("Running egg script Forest - Cherry + Butterfly Bloom")
+wait(12)
+print("ADDED IMAGES FOR NEW BIOME")
 -- ============================================================
 --  RARE EGG NOTIFIER + BOT FEED + BUTTERFLY BLOOM ALERT
 --  Rare egg alerts now come from scanning the game's eggs
@@ -15,7 +16,7 @@ local WEBHOOKS = {
 }
 
 -- Butterfly Bloom event alert
-local BUTTERFLY_WEBHOOK  = "https://discord.com/api/webhooks/1556086398136746057/lX4lKeT5phqA0Ve7e4ctIpEHQAQya1zgUmNjMkXdJdHmnpb4A6lTiBonN_txMpxJkQOG"
+local BUTTERFLY_WEBHOOK  = "https://thumbs.dreamstime.com/b/enchanted-forest-butterfly-surreal-iridescent-dream-vibrant-green-step-fantastical-realm-captivating-image-353977878.jpg"
 local BUTTERFLY_ROLE_ID  = "1556173039224225812"
 local BUTTERFLY_EVENT    = "ButterflyBloom"
 local BUTTERFLY_COOLDOWN = 600   -- seconds between alerts
@@ -23,7 +24,7 @@ local BUTTERFLY_DEFAULT_DURATION = 300
 local BUTTERFLY_IMAGE    = "https://img.magnific.com/free-vector/butterfly-realistic-isolated_1284-3881.jpg?semt=ais_hybrid&w=740&q=80"
 
 -- Webhook of your PRIVATE feed channel (the one you ran !egginput in)
-local FEED_WEBHOOK = "https://discord.com/api/webhooks/1554004883353632790/pveRQ_8LBUr5Tlxj34EBtO7Ruua8mvfIACa5QfvhgoUhc6rUw2hgI2VYDltxzmzmznx_"
+local FEED_WEBHOOK = "https://discord.com/api/webhooks/1556600950448459838/tPJePthdy2KoXsWjlB1MrOaTzRnh-6bG5p151i_OcAW6ixneVhLkO8BgJqek3O-VBpsH"
 
 
 -- ===================== SETTINGS =====================
@@ -34,7 +35,7 @@ local HEARTBEAT         = 60
 local IGNORE_FIRST_AREA = false
 
 local LATCH_ENABLED  = true
-local LATCH_SECONDS  = 302
+local LATCH_SECONDS  = 330
 
 local RESET_IF_CHANGED = 10
 local WINDOW_SECONDS   = 3
@@ -221,9 +222,6 @@ local EGG_NAMES = {
         ["World Burner"]   = "world burner",
     },
 
-    -- Enchanted Forest.
-    -- Left side  = the name shown on the bot's board
-    -- Right side = what the game calls the egg (a list when it has older names too)
     ["Enchanted Forest"] = {
         ["Royal Skywhale"]    = "royal skywhale",
         ["Celestial Sunlion"] = { "celestial sunlion", "cosmic lion" },
@@ -280,6 +278,8 @@ local EGG_IMAGES = {
     ["world burner"] = "https://asaiya2.github.io/steal-an-egg/World_Burner.png",
     ["archangel"]    = "https://asaiya2.github.io/steal-an-egg/ArchAngel.png",
     ["unicorn"]      = "https://asaiya2.github.io/steal-an-egg/Unicorn.png",
+    ["royal skywhale"]    = "https://github.com/Asaiya2/steal-an-egg/blob/main/skywhale.png?raw=true",
+
 
     ["skeleton horse"]       = "https://asaiya2.github.io/steal-an-egg/Skeleton_horse.png",
     ["pegasus"]              = "https://asaiya2.github.io/steal-an-egg/Pegasus.png",
@@ -291,6 +291,7 @@ local EGG_IMAGES = {
     ["phoenix"]              = "https://asaiya2.github.io/steal-an-egg/phoenix.png",
     ["lava dragon"]          = "https://asaiya2.github.io/steal-an-egg/Lava_Dragon.png",
     ["eternal lunar dragon"] = "https://asaiya2.github.io/steal-an-egg/Lunar_Dragon.png",
+    ["celestial sunlion"] = "https://asaiya2.github.io/steal-an-egg/sunlion.png",
 
     ["razorfang"]      = "https://asaiya2.github.io/steal-an-egg/Rock_Demon.png",
     ["gargoyle"]       = "https://asaiya2.github.io/steal-an-egg/Gargoyle_Demon.png",
@@ -304,12 +305,8 @@ local EGG_IMAGES = {
     ["yeti"]           = "https://asaiya2.github.io/steal-an-egg/White_Yeti.png",
     ["tralaledon"]     = "https://asaiya2.github.io/steal-an-egg/Block_Shark.png",
     ["trex"]           = "https://asaiya2.github.io/steal-an-egg/Block_TRex.png",
+    ["starry fox"]        = "https://asaiya2.github.io/steal-an-egg/Starry_fox.png",
 
-    -- Enchanted Forest: paste an image link in place of "link here".
-    -- While it says "link here" the alert is sent without a thumbnail.
-    ["starry fox"]        = "link here",
-    ["celestial sunlion"] = "link here",
-    ["royal skywhale"]    = "link here",
 }
 
 
@@ -318,11 +315,12 @@ local EGG_IMAGES = {
 -- ============================================================
 
 local EGG_VALUES = {
-    ["kitsune"]      = "1.8B/s",
-    ["nightflame"]   = "3B/s",
-    ["world burner"] = "5B/s",
-    ["archangel"]    = "3B/s",
-    ["unicorn"]      = "1B/s",
+    ["kitsune"]          = "1.8B/s",
+    ["nightflame"]       = "3B/s",
+    ["world burner"]     = "5B/s",
+    ["archangel"]        = "3B/s",
+    ["unicorn"]          = "1B/s",
+    ["royal skywhale"]   = "8B/s",
 
     ["skeleton horse"]       = "1.3B/s",
     ["pegasus"]              = "1.3B/s",
@@ -351,7 +349,6 @@ local EGG_VALUES = {
     -- Enchanted Forest: replace "VALUE NOT SET" with the real value (e.g. "1.5B/s").
     ["starry fox"]        = "500M/s",
     ["celestial sunlion"] = "2B/s",
-    ["royal skywhale"]    = "Will set later after waking up",
 }
 
 
@@ -1186,9 +1183,10 @@ task.spawn(function()
 
                 local gone, fresh = diffIds(windowIds, ids)
 
-                local bigChange =
-                    gone >= RESET_IF_CHANGED
-                    or fresh >= RESET_IF_CHANGED
+                -- only NEW eggs appearing starts a new cycle. Eggs disappearing
+                -- (the game clears the field ~10s before the reroll) is ignored,
+                -- so the board keeps showing the old eggs until the new ones spawn.
+                local bigChange = fresh >= RESET_IF_CHANGED
 
                 local locked =
                     cycleStart ~= nil
