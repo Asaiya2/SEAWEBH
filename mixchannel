@@ -16,7 +16,7 @@ local WEBHOOKS = {
 }
 
 -- Butterfly Bloom event alert
-local BUTTERFLY_WEBHOOK  = "https://discord.com/api/webhooks/1556600950448459838/tPJePthdy2KoXsWjlB1MrOaTzRnh-6bG5p151i_OcAW6ixneVhLkO8BgJqek3O-VBpsH"
+local BUTTERFLY_WEBHOOK  = "https://discord.com/api/webhooks/1556086398136746057/lX4lKeT5phqA0Ve7e4ctIpEHQAQya1zgUmNjMkXdJdHmnpb4A6lTiBonN_txMpxJkQOG"
 local BUTTERFLY_ROLE_ID  = "1556173039224225812"
 local BUTTERFLY_EVENT    = "ButterflyBloom"
 local BUTTERFLY_COOLDOWN = 600   -- seconds between alerts
