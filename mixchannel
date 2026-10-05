@@ -1,5 +1,5 @@
 wait(12)
-print("ADDED IMAGES FOR NEW BIOME")
+print("ADDED IMAGES FOR NEW BIOME + MIXED CHANNELS")
 -- ============================================================
 --  RARE EGG NOTIFIER + BOT FEED + BUTTERFLY BLOOM ALERT
 --  Rare egg alerts now come from scanning the game's eggs
