@@ -291,7 +291,7 @@ local EGG_IMAGES = {
     ["phoenix"]              = "https://asaiya2.github.io/steal-an-egg/phoenix.png",
     ["lava dragon"]          = "https://asaiya2.github.io/steal-an-egg/Lava_Dragon.png",
     ["eternal lunar dragon"] = "https://asaiya2.github.io/steal-an-egg/Lunar_Dragon.png",
-    ["celestial sunlion"] = "https://github.com/Asaiya2/steal-an-egg/blob/main/sunlion.png?raw=true",
+    ["celestial sunlion"] = "https://asaiya2.github.io/steal-an-egg/sunlion.png",
 
     ["razorfang"]      = "https://asaiya2.github.io/steal-an-egg/Rock_Demon.png",
     ["gargoyle"]       = "https://asaiya2.github.io/steal-an-egg/Gargoyle_Demon.png",
