@@ -1,0 +1,889 @@
+-- ============================================================
+--  RARE EGG KG NOTIFIER + CONFIGURABLE RARITY SERVER HOPPER  (v3)
+--  Standalone, made for auto execute.
+--  1) Watches the field only for the rarities selected in HOP_FOR and
+--     posts a Discord embed with the egg's kg.
+--  2) Starts a persistent rarity-hunting timer. When a selected egg is
+--     found, it sends the webhook and hops. If the next server has no
+--     selected egg, it STILL hops while the timer is active. This repeats
+--     across script re-executions/teleports until the duration expires.
+--  Stop hopping by hand: run   getgenv().EGGKG_STOP = true
+-- ============================================================
+
+if not game:IsLoaded() then game.Loaded:Wait() end
+
+-- ===================== WEBHOOKS =====================
+-- Paste your webhook URLs (Discord: channel settings > Integrations > Webhooks).
+local WEBHOOKS = {
+    Secret  = "https://discord.com/api/webhooks/1556825366956609629/Rkfj6fH6fLobKN3Q1NnzgHXnPGZuhDDjDcN9dDO27NeMbtn8Qj_saLoces-f7zK_Z4w4",
+    Eternal = "https://discord.com/api/webhooks/1556825366956609629/Rkfj6fH6fLobKN3Q1NnzgHXnPGZuhDDjDcN9dDO27NeMbtn8Qj_saLoces-f7zK_Z4w4",
+    Divine  = "https://discord.com/api/webhooks/1556825366956609629/Rkfj6fH6fLobKN3Q1NnzgHXnPGZuhDDjDcN9dDO27NeMbtn8Qj_saLoces-f7zK_Z4w4",
+    Custom  = "https://discord.com/api/webhooks/1556825366956609629/Rkfj6fH6fLobKN3Q1NnzgHXnPGZuhDDjDcN9dDO27NeMbtn8Qj_saLoces-f7zK_Z4w4",
+}
+
+-- Role pings. Leave "" to not ping that tier.
+local ROLE_IDS = {
+    Secret  = "",
+    Eternal = "",
+    Divine  = "",
+    Custom  = "",
+}
+
+-- ===================== SETTINGS =====================
+local SCAN_INTERVAL      = 1      -- seconds between field scans
+local SEND_GAP           = 0.4    -- seconds between alerts (Discord rate limit)
+local FORGET_SECONDS     = 900    -- forget an egg this long after it disappears
+local ALERT_ON_START     = true   -- keep true: alerts for eggs already out when you join a server
+local SHOW_LOCATION      = true   -- show the area under the title
+local AUTO_BY_RARITY     = false  -- strict: only eggs from selected HOP_FOR lists are watched
+local TEST_MODE          = false  -- true: sends 3 sample alerts on start
+local KG_DECIMALS        = 0      -- 0 = "65K", 1 = "65.6K"
+
+-- Minimum kg needed to send an alert, per tier (0 = always send).
+local MIN_KG = {
+    Secret  = 0,
+    Eternal = 0,
+    Divine  = 0,
+    Custom  = 0,
+}
+
+-- ===================== SERVER HOPPING =====================
+-- HOP_FOR above determines which rarities trigger hopping.
+local HOP_ENABLED   = true
+local HOP_DELAY     = 3           -- seconds between hops (raise to 5-6 if you get rate limited a lot)
+local MIN_PLAYERS   = 1           -- skip servers with fewer players than this (2 avoids nearly-dead servers)
+local VISITED_FILE  = "egg_hop_visited.json"
+local VISITED_TTL   = 900         -- don't revisit a server for this many seconds
+local POOL_FILE     = "egg_hop_pool_asc.json"
+local POOL_TTL      = 300         -- reuse a saved server list for this many seconds
+local SERVER_PAGES  = 1           -- pages (100 servers each) to read per refill
+
+-- ===================== CUSTOM EGGS =====================
+--   names   = game names for the egg (any spacing/case)
+--   minKg   = optional, only alert at or above this weight
+--   webhook = optional, send to a different webhook than WEBHOOKS.Custom
+--   image   = optional thumbnail URL
+local CUSTOM_EGGS = {
+
+}
+
+-- ===================== TIER LISTS =====================
+-- ============================================================
+-- RARITY SELECTION
+-- ============================================================
+-- Put whichever rarities you want the script to watch/hop for here.
+--
+-- Examples:
+--   { "Secret" }
+--   { "Eternal" }
+--   { "Divine" }
+--   { "Secret", "Eternal" }
+--   { "Secret", "Eternal", "Divine" }
+--
+-- The script will ONLY use the rarities listed here.
+local HOP_FOR = {
+    "Secret",
+    "Eternal",
+    "Divine",
+}
+
+if #HOP_FOR == 0 then
+    warn("[EGG KG] HOP_FOR is empty. The script will not watch or hop for any rarity.")
+end
+
+-- ===================== PERSISTENT HUNT TIMER =====================
+-- How long one rarity-hunting session lasts. 300 = 5 minutes.
+local RARITY_DURATION = 300
+
+-- This file survives script re-execution and teleporting to another server.
+local TIMER_FILE = "egg_rarity_hunt_timer.json"
+
+-- ============================================================
+-- ALL RARITY EGG LISTS
+-- ============================================================
+local ALL_RARE = {
+    Secret = {
+        "RazorFang", "Gargoyle", "Centaur", "Pure Jellyfish", "Mutant Shark",
+        { "Cosmic Skeleton", "Cosmic Skeleton Boss", "Alien Skeleton Boss" },
+        "Cosmic Dragon", "Cerberus", "Kraken", "Yeti", "Tralaledon",
+        { "TRex", "TyrannosaurusRex" },
+        "Stag",
+        { "Starry Fox", "Cosmic Fox" },
+    },
+
+    Eternal = {
+        "Skeleton Horse", "Pegasus", "Oni Tiger", "Gorilla King", "Ice Dragon",
+        "Mosasaurus", "El Maja", "Phoenix", "Lava Dragon", "Eternal Lunar Dragon",
+        { "Celestial Sunlion", "Cosmic Lion" },
+    },
+
+    Divine = {
+        "World Burner", "ArchAngel", "Nightflame", "Kitsune", "Unicorn",
+        "Royal Skywhale",
+    },
+}
+
+-- Build RARE from HOP_FOR.
+-- This means unselected rarities do not enter LOOKUP at all.
+local RARE = {}
+
+for _, tier in ipairs(HOP_FOR) do
+    if ALL_RARE[tier] then
+        RARE[tier] = ALL_RARE[tier]
+    else
+        warn("[EGG KG] Unknown rarity in HOP_FOR: " .. tostring(tier))
+    end
+end
+
+-- ===================== LOOK & FEEL =====================
+local STYLE = {
+    Secret  = { color = 0xE74C3C, emoji = "🔮", title = "SECRET EGG SPAWNED",  tag = "A Hidden Egg has appeared!" },
+    Eternal = { color = 0x9B59B6, emoji = "♾️", title = "ETERNAL EGG SPAWNED", tag = "An Immortal Egg has awakened!" },
+    Divine  = { color = 0xF1C40F, emoji = "✨", title = "DIVINE EGG SPAWNED",  tag = "A Heavenly Egg has descended!" },
+    Custom  = { color = 0x3498DB, emoji = "⭐", title = "WATCHED EGG SPAWNED", tag = "An egg you are watching is out!" },
+}
+
+local BOT_NAME    = "WORST • Steal An Egg"
+local BOT_AVATAR  = "https://github.com/Asaiya2/steal-an-egg/blob/main/neW.png?raw=true"
+local FOOTER_TEXT = "https://discord.gg/W0RST"
+
+local IMAGES = {
+    ["kitsune"]        = "https://asaiya2.github.io/steal-an-egg/Kitsune.png",
+    ["nightflame"]     = "https://asaiya2.github.io/steal-an-egg/Nightflame.png",
+    ["world burner"]   = "https://asaiya2.github.io/steal-an-egg/World_Burner.png",
+    ["archangel"]      = "https://asaiya2.github.io/steal-an-egg/ArchAngel.png",
+    ["unicorn"]        = "https://asaiya2.github.io/steal-an-egg/Unicorn.png",
+    ["royal skywhale"] = "https://github.com/Asaiya2/steal-an-egg/blob/main/skywhale.png?raw=true",
+
+    ["skeleton horse"]       = "https://asaiya2.github.io/steal-an-egg/Skeleton_horse.png",
+    ["pegasus"]              = "https://asaiya2.github.io/steal-an-egg/Pegasus.png",
+    ["oni tiger"]            = "https://asaiya2.github.io/steal-an-egg/Oni_Tiger.png",
+    ["gorilla king"]         = "https://asaiya2.github.io/steal-an-egg/Gorrila.png",
+    ["ice dragon"]           = "https://asaiya2.github.io/steal-an-egg/Ice_Dragon.png",
+    ["mosasaurus"]           = "https://asaiya2.github.io/steal-an-egg/Mosasaur.png",
+    ["el maja"]              = "https://asaiya2.github.io/steal-an-egg/El_maja.png",
+    ["phoenix"]              = "https://asaiya2.github.io/steal-an-egg/phoenix.png",
+    ["lava dragon"]          = "https://asaiya2.github.io/steal-an-egg/Lava_Dragon.png",
+    ["eternal lunar dragon"] = "https://asaiya2.github.io/steal-an-egg/Lunar_Dragon.png",
+    ["celestial sunlion"]    = "https://asaiya2.github.io/steal-an-egg/sunlion.png",
+
+    ["razorfang"]       = "https://asaiya2.github.io/steal-an-egg/Rock_Demon.png",
+    ["gargoyle"]        = "https://asaiya2.github.io/steal-an-egg/Gargoyle_Demon.png",
+    ["centaur"]         = "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQmpo9iE1MHMQNyB2lCJ6QtI4O_Stz7EvDQXu6HZ2WZTw&s",
+    ["pure jellyfish"]  = "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQIXvOauCXxGctW9tMXU6YeSDuNiL8I_RxhFolmuKZy0A&s",
+    ["mutant shark"]    = "https://static.wikia.nocookie.net/stealanegg/images/e/e5/Mutant_Shark.png/revision/latest?cb=20260901190802",
+    ["cosmic skeleton"] = "https://static.wikia.nocookie.net/stealanegg/images/9/97/Cosmic_Skeleton_Boss.png/revision/latest/scale-to-width-down/185?cb=20260904110709",
+    ["cosmic dragon"]   = "https://asaiya2.github.io/steal-an-egg/Star_Dragon.png",
+    ["cerberus"]        = "https://asaiya2.github.io/steal-an-egg/Cerberus_Flame.png",
+    ["kraken"]          = "https://static.wikia.nocookie.net/stealanegg/images/d/d3/Kraken.png/revision/latest",
+    ["yeti"]            = "https://asaiya2.github.io/steal-an-egg/White_Yeti.png",
+    ["tralaledon"]      = "https://asaiya2.github.io/steal-an-egg/Block_Shark.png",
+    ["trex"]            = "https://asaiya2.github.io/steal-an-egg/Block_TRex.png",
+    ["starry fox"]      = "https://asaiya2.github.io/steal-an-egg/Starry_fox.png",
+    ["stag"]            = "https://github.com/Asaiya2/steal-an-egg/blob/main/stag.webp?raw=true",
+}
+
+-- ============================================================
+-- CODE (nothing below needs editing)
+-- ============================================================
+
+local HttpService     = game:GetService("HttpService")
+local RS              = game:GetService("ReplicatedStorage")
+local Players         = game:GetService("Players")
+local TeleportService = game:GetService("TeleportService")
+
+local httpRequest = request or http_request or (syn and syn.request) or (http and http.request)
+
+-- ============================================================
+-- PERSISTENT HUNT TIMER
+-- ============================================================
+-- The timer is based on os.time(), not os.clock(), so it survives
+-- script re-execution and teleporting between servers.
+local huntStart = nil
+local lastSpawnAt = nil
+
+local function saveHuntTimer()
+    if type(writefile) ~= "function" then return end
+    pcall(function()
+        writefile(TIMER_FILE, HttpService:JSONEncode({
+            startedAt = huntStart,
+            lastSpawnAt = lastSpawnAt,
+            duration = RARITY_DURATION,
+            rarities = HOP_FOR,
+        }))
+    end)
+end
+
+local function loadHuntTimer()
+    if type(isfile) ~= "function" or type(readfile) ~= "function" or not isfile(TIMER_FILE) then
+        return nil
+    end
+
+    local ok, data = pcall(function()
+        return HttpService:JSONDecode(readfile(TIMER_FILE))
+    end)
+    if not ok or type(data) ~= "table" then return nil end
+
+    local startedAt = tonumber(data.startedAt)
+    local savedLastSpawn = tonumber(data.lastSpawnAt)
+    local oldDuration = tonumber(data.duration)
+    if not startedAt or not oldDuration then return nil end
+
+    -- If the selected rarity set changed, start a fresh hunting session.
+    local oldRarities = data.rarities
+    if type(oldRarities) == "table" then
+        local a, b = {}, {}
+        for _, v in ipairs(oldRarities) do a[tostring(v)] = true end
+        for _, v in ipairs(HOP_FOR) do b[tostring(v)] = true end
+        for k in pairs(a) do if not b[k] then return nil end end
+        for k in pairs(b) do if not a[k] then return nil end end
+    end
+
+    -- A duration change intentionally starts a fresh session.
+    if oldDuration ~= RARITY_DURATION then return nil end
+    if os.time() - startedAt >= RARITY_DURATION then return nil end
+
+    lastSpawnAt = savedLastSpawn
+    return startedAt
+end
+
+local function clearHuntTimerFile()
+    if type(delfile) == "function" then
+        pcall(delfile, TIMER_FILE)
+    elseif type(writefile) == "function" then
+        -- Fallback: leave an expired record. It will be replaced on the next run.
+    end
+end
+
+huntStart = loadHuntTimer()
+if not huntStart then
+    huntStart = os.time()
+    lastSpawnAt = nil
+    saveHuntTimer()
+    print("[EGG KG] started a new " .. RARITY_DURATION .. "s rarity hunt")
+else
+    print("[EGG KG] resumed rarity hunt; " .. math.max(0, os.time() - huntStart)
+        .. "s has already elapsed")
+end
+
+local function huntElapsed()
+    return math.max(0, os.time() - huntStart)
+end
+
+local function huntRemaining()
+    return math.max(0, RARITY_DURATION - huntElapsed())
+end
+
+local function huntActive()
+    return huntRemaining() > 0
+end
+
+local function sinceLastSpawn()
+    if not lastSpawnAt then return nil end
+    return math.max(0, os.time() - lastSpawnAt)
+end
+
+local function markSelectedSpawn()
+    lastSpawnAt = os.time()
+    saveHuntTimer()
+end
+
+-- Put a small timer state object in Workspace so it is easy to inspect.
+-- The saved timestamp above is the persistent source of truth across servers.
+local function setupWorkspaceTimer()
+    pcall(function()
+        local old = workspace:FindFirstChild("EggRarityHunt")
+        if old then old:Destroy() end
+
+        local folder = Instance.new("Folder")
+        folder.Name = "EggRarityHunt"
+        folder.Parent = workspace
+
+        local function value(className, name, val)
+            local x = Instance.new(className)
+            x.Name = name
+            x.Value = val
+            x.Parent = folder
+            return x
+        end
+
+        value("IntValue", "StartedAt", huntStart)
+        value("IntValue", "Duration", RARITY_DURATION)
+        value("StringValue", "SelectedRarities", table.concat(HOP_FOR, ", "))
+        value("IntValue", "Elapsed", huntElapsed())
+        value("IntValue", "Remaining", huntRemaining())
+        value("BoolValue", "Active", huntActive())
+        value("IntValue", "LastSpawnAt", lastSpawnAt or 0)
+        value("IntValue", "SinceLastSpawn", sinceLastSpawn() or -1)
+
+        local part = Instance.new("Part")
+        part.Name = "TimerDisplay"
+        part.Anchored = true
+        part.CanCollide = false
+        part.CanQuery = false
+        part.CanTouch = false
+        part.Transparency = 1
+        part.Size = Vector3.new(1, 1, 1)
+        local character = Players.LocalPlayer and Players.LocalPlayer.Character
+        local root = character and character:FindFirstChild("HumanoidRootPart")
+        part.Position = root and (root.Position + Vector3.new(0, 5, 0)) or Vector3.new(0, 5, 0)
+        part.Parent = folder
+
+        local gui = Instance.new("BillboardGui")
+        gui.Name = "HuntTimer"
+        gui.Size = UDim2.fromOffset(280, 70)
+        gui.StudsOffset = Vector3.new(0, 3, 0)
+        gui.AlwaysOnTop = true
+        gui.Parent = part
+
+        local label = Instance.new("TextLabel")
+        label.Name = "Timer"
+        label.Size = UDim2.fromScale(1, 1)
+        label.BackgroundTransparency = 0.25
+        label.TextScaled = true
+        label.Font = Enum.Font.GothamBold
+        label.Text = "RARITY HUNT\n" .. table.concat(HOP_FOR, " + ") .. "\n" .. huntRemaining() .. "s"
+        label.Parent = gui
+
+        task.spawn(function()
+            while folder.Parent and huntActive() do
+                local elapsed = huntElapsed()
+                local remaining = huntRemaining()
+                folder.Elapsed.Value = elapsed
+                folder.Remaining.Value = remaining
+                folder.Active.Value = remaining > 0
+                folder.LastSpawnAt.Value = lastSpawnAt or 0
+                folder.SinceLastSpawn.Value = sinceLastSpawn() or -1
+                local spawnText = lastSpawnAt and ((sinceLastSpawn() or 0) .. "s since last spawn") or "no selected egg found yet"
+                label.Text = "RARITY HUNT\n" .. table.concat(HOP_FOR, " + ") .. "\n" .. remaining .. "s left | " .. spawnText
+                task.wait(1)
+            end
+            if folder.Parent then
+                folder.Elapsed.Value = huntElapsed()
+                folder.Remaining.Value = 0
+                folder.Active.Value = false
+                folder.LastSpawnAt.Value = lastSpawnAt or 0
+                folder.SinceLastSpawn.Value = sinceLastSpawn() or -1
+                label.Text = "RARITY HUNT\n" .. table.concat(HOP_FOR, " + ") .. "\nEXPIRED"
+            end
+        end)
+    end)
+end
+
+setupWorkspaceTimer()
+
+local function norm(s)
+    return (tostring(s or ""):lower():gsub("[^%w]", ""))
+end
+
+local function req(getter)
+    local ok, r = pcall(function() return require(getter()) end)
+    return ok and r or nil
+end
+
+-- the game's modules can take a moment to exist right after joining
+local EggState
+for _ = 1, 30 do
+    EggState = req(function() return RS.Client.EggState end)
+    if EggState then break end
+    task.wait(1)
+end
+
+local EggRecords = req(function() return RS.Shared.Util.EggRecords end)
+local Assets     = req(function() return RS.Data.Assets end)
+local Areas      = req(function() return RS.Data.Areas end)
+
+local assetDir = type(Assets) == "table" and Assets.Directory or {}
+local areaDir  = type(Areas) == "table" and (Areas.Directory or Areas) or {}
+
+-- ---------------- kg ----------------
+local function eggKg(r)
+    if not EggRecords then return nil end
+    local ok, kg = pcall(EggRecords.WeightKg, r)
+    if ok and type(kg) == "number" then return kg end
+    ok, kg = pcall(EggRecords.WeightKgForScale, r.AssetCategory, r.AssetScale)
+    if ok and type(kg) == "number" then return kg end
+    return nil
+end
+
+local KG_SUFFIXES = { "", "K", "M", "B", "T", "Qa", "Qi" }
+
+local function formatKg(kg)
+    if not kg then return "?" end
+    local n = math.floor(math.max(kg, 0) + 0.5)
+    local i = 1
+    while n >= 1000 and i < #KG_SUFFIXES do
+        n = n / 1000
+        i = i + 1
+    end
+    if i == 1 then
+        return tostring(n) .. " Kg"
+    end
+    local mult = 10 ^ KG_DECIMALS
+    local v = math.floor(n * mult) / mult   -- cuts off, never rounds up
+    return string.format("%." .. KG_DECIMALS .. "f", v) .. KG_SUFFIXES[i] .. " Kg"
+end
+
+-- ---------------- asset / area names ----------------
+local entryCache = {}
+local function getEntry(cat)
+    cat = tostring(cat or "")
+    if cat == "" then return nil end
+    local cached = entryCache[cat]
+    if cached ~= nil then return cached or nil end
+
+    local entry = assetDir[cat]
+    if entry == nil then
+        local want = norm(cat)
+        for key, e in pairs(assetDir) do
+            if type(e) == "table" then
+                local egg = type(e.Egg) == "table" and e.Egg or nil
+                if norm(key) == want or norm(e._id) == want or norm(e.DisplayName) == want
+                    or (egg and norm(egg.ModelName) == want) then
+                    entry = e
+                    break
+                end
+            end
+        end
+    end
+    entryCache[cat] = entry or false
+    return entry
+end
+
+local function areaName(areaId)
+    local key = tostring(areaId or "")
+    if key == "" then return "" end
+    local a = areaDir[key]
+    if type(a) == "table" then return tostring(a.DisplayName or key) end
+    return key
+end
+
+local function serverLink()
+    if game.JobId == "" then return nil end
+    return string.format("https://www.roblox.com/games/start?placeId=%d&gameInstanceId=%s",
+        game.PlaceId, game.JobId)
+end
+
+-- Returns one actual USERNAME currently in this server.
+-- Player.Name is used, not DisplayName.
+local function getServerPlayer()
+    local localPlayer = Players.LocalPlayer
+
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= localPlayer then
+            return player.Name
+        end
+    end
+
+    -- If you are alone, use your own username.
+    if localPlayer then
+        return localPlayer.Name
+    end
+
+    return "Unknown"
+end
+
+-- ---------------- watch list ----------------
+local LOOKUP = {}
+
+local IMAGES_N = {}
+for name, url in pairs(IMAGES) do IMAGES_N[norm(name)] = url end
+
+local function addEntry(names, tier, minKg, webhook, image)
+    if type(names) ~= "table" then names = { names } end
+    if not names[1] then return end
+    local img = image
+    if not img then
+        for _, n in ipairs(names) do
+            if IMAGES_N[norm(n)] then img = IMAGES_N[norm(n)] break end
+        end
+    end
+    local info = { display = names[1], tier = tier, minKg = minKg or 0, webhook = webhook, image = img }
+    for _, n in ipairs(names) do
+        local k = norm(n)
+        if LOOKUP[k] == nil then LOOKUP[k] = info end
+    end
+end
+
+for _, c in ipairs(CUSTOM_EGGS) do
+    addEntry(c.names, "Custom", c.minKg or MIN_KG.Custom, c.webhook, c.image)
+end
+for _, tier in ipairs(HOP_FOR) do
+    if RARE[tier] then
+        for _, entry in ipairs(RARE[tier]) do
+            addEntry(entry, tier, MIN_KG[tier], nil, nil)
+        end
+    end
+end
+
+local AUTO_TIERS = { secret = "Secret", eternal = "Eternal", divine = "Divine" }
+
+local function resolve(r)
+    local cat = r.AssetCategory or r.Category
+    if not cat then return nil end
+    local entry = getEntry(cat)
+
+    local keys = { norm(cat) }
+    if type(entry) == "table" then
+        keys[#keys + 1] = norm(entry.DisplayName)
+        keys[#keys + 1] = norm(entry._id)
+    end
+    for _, k in ipairs(keys) do
+        if k ~= "" and LOOKUP[k] then return LOOKUP[k] end
+    end
+
+    if AUTO_BY_RARITY and type(entry) == "table" and type(entry.Rarity) == "table" then
+        local tier = AUTO_TIERS[norm(entry.Rarity._id or entry.Rarity.DisplayName)]
+        if tier then
+            local display = tostring(entry.DisplayName or cat)
+            return { display = display, tier = tier, minKg = MIN_KG[tier],
+                     image = IMAGES_N[norm(display)] }
+        end
+    end
+    return nil
+end
+
+-- ---------------- discord ----------------
+local function validUrl(u)
+    return type(u) == "string" and u:find("/api/webhooks/", 1, true) ~= nil
+end
+
+local function post(url, payload)
+    if not httpRequest then warn("[EGG KG] No http request function in this executor") return end
+    if not validUrl(url) then warn("[EGG KG] Webhook not set or invalid") return end
+
+    for attempt = 1, 4 do
+        local ok, res = pcall(httpRequest, {
+            Url     = url,
+            Method  = "POST",
+            Headers = { ["Content-Type"] = "application/json" },
+            Body    = HttpService:JSONEncode(payload),
+        })
+        if ok and type(res) == "table" and tonumber(res.StatusCode) == 429 then
+            local wait = 1
+            pcall(function() wait = tonumber(HttpService:JSONDecode(res.Body).retry_after) or 1 end)
+            task.wait(wait + 0.1)
+        else
+            if not ok then warn("[EGG KG] Send failed: " .. tostring(res)) end
+            return
+        end
+    end
+end
+
+local function sendAlert(info, kg, location)
+    local style = STYLE[info.tier]
+    local roleId = ROLE_IDS[info.tier]
+    local mention = (roleId and roleId ~= "") and ("<@&" .. roleId .. "> ") or ""
+    local eggName = info.display .. " Egg"
+
+    local desc = "*" .. style.tag .. "*"
+    if SHOW_LOCATION and location and location ~= "" then
+        desc = desc .. "\n📍 **" .. location .. "**"
+    end
+
+    local kgText = formatKg(kg)
+    local link = serverLink()
+    local serverValue = link and ("[**Click to Join Server**](" .. link .. ")") or "**Unavailable**"
+    local serverPlayer = getServerPlayer()
+
+    local embed = {
+        title       = style.emoji .. "  " .. style.title .. "  " .. style.emoji,
+        description = desc,
+        color       = style.color,
+        fields = {
+            { name = "🥚 Egg",    value = "**" .. eggName .. "**",       inline = true },
+            { name = "💎 Rarity", value = "**" .. info.tier .. "**",     inline = true },
+            { name = "👤 Player", value = "**" .. serverPlayer .. "**",  inline = true },
+            { name = "🔗 Server", value = serverValue,                   inline = false },
+            { name = "⚖️ EGG KG", value = "```" .. kgText .. "```",    inline = false },
+        },
+        footer    = { text = FOOTER_TEXT .. " • " .. info.tier .. " Alert" },
+        timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ", os.time()),
+    }
+    if info.image and info.image ~= "" then
+        embed.thumbnail = { url = info.image }
+    end
+
+    post(info.webhook or WEBHOOKS[info.tier], {
+        username   = BOT_NAME,
+        avatar_url = (BOT_AVATAR ~= "") and BOT_AVATAR or nil,
+        content    = mention .. style.emoji .. " **" .. eggName .. "** in this server",
+        allowed_mentions = { parse = { "roles" } },
+        embeds     = { embed },
+    })
+end
+
+-- alert queue (keeps us under Discord's rate limit)
+local queue = {}
+local sendBusy = false
+
+task.spawn(function()
+    while true do
+        local a = table.remove(queue, 1)
+        if a then
+            sendBusy = true
+            local ok, err = pcall(sendAlert, a.info, a.kg, a.location)
+            if not ok then warn("[EGG KG] alert error: " .. tostring(err)) end
+            sendBusy = false
+            task.wait(SEND_GAP)
+        else
+            task.wait(0.1)
+        end
+    end
+end)
+
+if TEST_MODE then
+    local testTier = HOP_FOR[1]
+    local testEntry = testTier and RARE[testTier] and RARE[testTier][1]
+    local testName = type(testEntry) == "table" and testEntry[1] or testEntry
+    if testName then
+        queue[#queue + 1] = { info = LOOKUP[norm(testName)], kg = 123, location = "Test" }
+    end
+end
+
+-- ============================================================
+-- SERVER HOPPER
+-- ============================================================
+
+local targetCount = 0   -- total selected-rarity eggs seen in the last scan
+
+local function stopped()
+    return type(getgenv) == "function" and getgenv().EGGKG_STOP == true
+end
+
+-- ---- visited servers (so we don't go back) ----
+local function loadVisited()
+    local t = {}
+    pcall(function()
+        if type(isfile) == "function" and type(readfile) == "function" and isfile(VISITED_FILE) then
+            local data = HttpService:JSONDecode(readfile(VISITED_FILE))
+            local now = os.time()
+            for id, ts in pairs(data) do
+                if type(ts) == "number" and now - ts < VISITED_TTL then t[id] = ts end
+            end
+        end
+    end)
+    return t
+end
+
+local visited = loadVisited()
+
+local function saveVisited()
+    if type(writefile) == "function" then
+        pcall(writefile, VISITED_FILE, HttpService:JSONEncode(visited))
+    end
+end
+
+if game.JobId ~= "" then
+    visited[game.JobId] = os.time()
+    saveVisited()
+end
+
+-- ---- server list (emptiest first), saved to a file so each new server can reuse it ----
+local pool      = {}          -- server ids, fewest players first
+local poolStamp = os.time()   -- when this list was fetched from Roblox
+local rateWait  = 5           -- backoff after a rate limit, doubles each time
+
+local function savePool()
+    if type(writefile) == "function" then
+        pcall(writefile, POOL_FILE, HttpService:JSONEncode({ t = poolStamp, ids = pool }))
+    end
+end
+
+local function loadPool()
+    pcall(function()
+        if type(isfile) == "function" and type(readfile) == "function" and isfile(POOL_FILE) then
+            local d = HttpService:JSONDecode(readfile(POOL_FILE))
+            if type(d) == "table" and os.time() - (tonumber(d.t) or 0) < POOL_TTL then
+                poolStamp = tonumber(d.t) or os.time()
+                for _, id in ipairs(d.ids or {}) do
+                    if not visited[id] and id ~= game.JobId then
+                        pool[#pool + 1] = id
+                    end
+                end
+            end
+        end
+    end)
+end
+
+local function fetchServers(cursor)
+    if not httpRequest then return nil end
+    local url = string.format(
+        "https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&excludeFullGames=true&limit=100",
+        game.PlaceId)
+    if cursor then url = url .. "&cursor=" .. cursor end
+
+    local ok, res = pcall(httpRequest, { Url = url, Method = "GET" })
+    if ok and type(res) == "table" and tonumber(res.StatusCode) == 200 then
+        local ok2, data = pcall(function() return HttpService:JSONDecode(res.Body) end)
+        if ok2 and type(data) == "table" then return data end
+    end
+    return nil, (ok and type(res) == "table") and res.StatusCode or nil
+end
+
+local function refillPool()
+    local cursor
+    for _ = 1, SERVER_PAGES do
+        local data, status = fetchServers(cursor)
+        if not data then
+            if tonumber(status) == 429 then
+                rateWait = math.min(rateWait * 2, 120)
+                warn("[EGG KG] server list rate limited, waiting " .. rateWait .. "s")
+                task.wait(rateWait)
+            end
+            break
+        end
+
+        rateWait = 5
+        poolStamp = os.time()
+
+        for _, s in ipairs(data.data or {}) do
+            local playing, maxP = tonumber(s.playing), tonumber(s.maxPlayers)
+            if s.id ~= game.JobId and not visited[s.id] and playing and maxP
+                and playing >= MIN_PLAYERS and playing < maxP - 1 then
+                pool[#pool + 1] = s.id
+            end
+        end
+
+        cursor = data.nextPageCursor
+        if not cursor then break end
+    end
+    savePool()
+end
+
+loadPool()
+
+-- ---- teleport + hop loop ----
+local teleporting, floodUntil = false, 0
+
+TeleportService.TeleportInitFailed:Connect(function(_, result, msg)
+    teleporting = false
+    warn("[EGG KG] teleport failed: " .. tostring(result) .. " " .. tostring(msg))
+    if result == Enum.TeleportResult.Flooded then
+        floodUntil = os.clock() + 10
+    end
+end)
+
+local hopping = false
+
+local function hopLoop()
+    hopping = true
+    warn("[EGG KG] selected rarity egg in this server (" .. table.concat(HOP_FOR, ", ") .. "), hopping every " .. HOP_DELAY .. "s")
+
+    -- let the webhook go out first
+    local t0 = os.clock()
+    while (#queue > 0 or sendBusy) and os.clock() - t0 < 20 do task.wait(0.2) end
+
+    while HOP_ENABLED and not stopped() and huntActive() do
+        task.wait(HOP_DELAY)
+        if not huntActive() then break end
+
+        if os.clock() < floodUntil then task.wait(floodUntil - os.clock()) end
+        if #pool == 0 then refillPool() end
+
+        if #pool > 0 then
+            local id = table.remove(pool, 1)   -- emptiest server first
+            visited[id] = os.time()
+            saveVisited()
+            savePool()
+
+            teleporting = true
+            local tp0 = os.clock()
+            local ok, err = pcall(function()
+                TeleportService:TeleportToPlaceInstance(game.PlaceId, id, Players.LocalPlayer)
+            end)
+            if not ok then
+                teleporting = false
+                warn("[EGG KG] teleport error: " .. tostring(err))
+            end
+            -- a successful teleport ends this script; wait for a failure or a timeout
+            while teleporting and os.clock() - tp0 < 15 do task.wait(0.2) end
+            teleporting = false
+        else
+            warn("[EGG KG] no servers available, retrying")
+        end
+    end
+
+    hopping = false
+    warn("[EGG KG] hopping stopped (no selected rarity here, or stopped by you)")
+end
+
+-- starts hopping for the entire active hunting window, even when this server has no selected egg
+task.spawn(function()
+    while true do
+        if HOP_ENABLED and not hopping and not stopped() and huntActive() then
+            task.spawn(hopLoop)
+        end
+        task.wait(1)
+    end
+end)
+
+-- ============================================================
+-- SCANNER
+-- ============================================================
+
+if type(EggState) ~= "table" or type(EggState.ReadFieldEggs) ~= "function" then
+    warn("[EGG KG] EggState.ReadFieldEggs not found, cannot scan. Script stopped.")
+    return
+end
+
+local seen = {}
+local firstScan = true
+
+local function scan()
+    local ok, data = pcall(EggState.ReadFieldEggs)
+    if not (ok and type(data) == "table") then return end
+    local raw = data.Records or data
+    if type(raw) ~= "table" then return end
+
+    local now = os.clock()
+    local selectedCount = 0
+
+    for key, r in pairs(raw) do
+        if type(r) == "table" then
+            local uid = tostring(r.Uid or (type(key) == "string" and key) or "")
+            local info = resolve(r)
+
+            if info and uid ~= "" then
+                if RARE[info.tier] then
+                    selectedCount = selectedCount + 1
+                end
+
+                local isNew = seen[uid] == nil
+                seen[uid] = now
+
+                if huntActive() and isNew and (ALERT_ON_START or not firstScan) then
+                    local kg = eggKg(r)
+                    if (not kg) or kg >= (info.minKg or 0) then
+                        if RARE[info.tier] then
+                            markSelectedSpawn()
+                        end
+                        queue[#queue + 1] = { info = info, kg = kg, location = areaName(r.AreaId) }
+                        print(string.format("[EGG KG] %s (%s) | %s | %s",
+                            info.display, info.tier, formatKg(kg), areaName(r.AreaId)))
+                    end
+                end
+            end
+        end
+    end
+
+    targetCount = selectedCount
+    firstScan = false
+
+    for uid, t in pairs(seen) do
+        if now - t > FORGET_SECONDS then seen[uid] = nil end
+    end
+end
+
+print("[EGG KG] running. Hopping " .. (HOP_ENABLED and "ON" or "OFF")
+    .. " for: " .. table.concat(HOP_FOR, ", ")
+    .. ". Custom entries: " .. #CUSTOM_EGGS)
+
+while huntActive() do
+    local ok, err = pcall(scan)
+    if not ok then warn("[EGG KG] scan error: " .. tostring(err)) end
+    task.wait(SCAN_INTERVAL)
+end
+
+print("[EGG KG] selected rarity hunt duration ended.")
+clearHuntTimerFile()
