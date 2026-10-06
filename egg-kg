@@ -1,12 +1,16 @@
 -- ============================================================
---  RARE EGG KG NOTIFIER + CONFIGURABLE RARITY SERVER HOPPER  (v3)
+--  RARE EGG KG NOTIFIER + CONFIGURABLE RARITY SERVER HOPPER  (v4 + test button)
 --  Standalone, made for auto execute.
 --  1) Watches the field only for the rarities selected in HOP_FOR and
 --     posts a Discord embed with the egg's kg.
---  2) Starts a persistent rarity-hunting timer. When a selected egg is
---     found, it sends the webhook and hops. If the next server has no
---     selected egg, it STILL hops while the timer is active. This repeats
---     across script re-executions/teleports until the duration expires.
+--  2) Runs forever. It waits in the server until a selected egg
+--     appears. When one is found it sends the webhook and starts a
+--     5 minute window (eggs refresh every 5 minutes). During the
+--     window it hops servers, alerting on any selected egg it finds.
+--     When the window ends it stops hopping, stays in the current
+--     server and waits for the next selected egg, then repeats.
+--  3) TEST BUTTON in the middle of the screen: sends the join link,
+--     Job ID and player list of the CURRENT server (no egg needed).
 --  Stop hopping by hand: run   getgenv().EGGKG_STOP = true
 -- ============================================================
 
@@ -34,10 +38,10 @@ local SCAN_INTERVAL      = 1      -- seconds between field scans
 local SEND_GAP           = 0.4    -- seconds between alerts (Discord rate limit)
 local FORGET_SECONDS     = 900    -- forget an egg this long after it disappears
 local ALERT_ON_START     = true   -- keep true: alerts for eggs already out when you join a server
-local SHOW_LOCATION      = true   -- show the area under the title
+local SHOW_LOCATION      = true   -- (no longer used in the embed; player info is shown instead)
 local AUTO_BY_RARITY     = false  -- strict: only eggs from selected HOP_FOR lists are watched
 local TEST_MODE          = false  -- true: sends 3 sample alerts on start
-local KG_DECIMALS        = 0      -- 0 = "65K", 1 = "65.6K"
+local KG_DECIMALS        = 0      -- 0 = "65K", 1 = "65.6K"  (use 2 to see e.g. "2.47M Kg")
 
 -- Minimum kg needed to send an alert, per tier (0 = always send).
 local MIN_KG = {
@@ -91,8 +95,9 @@ if #HOP_FOR == 0 then
     warn("[EGG KG] HOP_FOR is empty. The script will not watch or hop for any rarity.")
 end
 
--- ===================== PERSISTENT HUNT TIMER =====================
--- How long one rarity-hunting session lasts. 300 = 5 minutes.
+-- ===================== PERSISTENT HUNT WINDOW =====================
+-- Length of the hopping window that starts when a selected egg is found.
+-- 300 = 5 minutes (eggs refresh every 5 minutes).
 local RARITY_DURATION = 300
 
 -- This file survives script re-execution and teleporting to another server.
@@ -104,16 +109,14 @@ local TIMER_FILE = "egg_rarity_hunt_timer.json"
 local ALL_RARE = {
     Secret = {
         "RazorFang", "Gargoyle", "Centaur", "Pure Jellyfish", "Mutant Shark",
-        { "Cosmic Skeleton", "Cosmic Skeleton Boss", "Alien Skeleton Boss" },
-        "Cosmic Dragon", "Cerberus", "Kraken", "Yeti", "Tralaledon",
-        { "TRex", "TyrannosaurusRex" },
+        { "Cosmic Skeleton", "Cosmic Skeleton Boss",},
         "Stag",
         { "Starry Fox", "Cosmic Fox" },
     },
 
     Eternal = {
-        "Skeleton Horse", "Pegasus", "Oni Tiger", "Gorilla King", "Ice Dragon",
-        "Mosasaurus", "El Maja", "Phoenix", "Lava Dragon", "Eternal Lunar Dragon",
+        "Skeleton Horse", "Pegasus", "Oni Tiger", "Gorilla King",
+        "Eternal Lunar Dragon",
         { "Celestial Sunlion", "Cosmic Lion" },
     },
 
@@ -195,10 +198,12 @@ local TeleportService = game:GetService("TeleportService")
 local httpRequest = request or http_request or (syn and syn.request) or (http and http.request)
 
 -- ============================================================
--- PERSISTENT HUNT TIMER
+-- PERSISTENT HUNT WINDOW
 -- ============================================================
--- The timer is based on os.time(), not os.clock(), so it survives
--- script re-execution and teleporting between servers.
+-- huntStart is nil while we are idle (waiting for an egg). It is set when
+-- a selected egg is found and cleared when RARITY_DURATION has passed.
+-- It uses os.time(), not os.clock(), so it survives script re-execution
+-- and teleporting between servers.
 local huntStart = nil
 local lastSpawnAt = nil
 
@@ -229,7 +234,7 @@ local function loadHuntTimer()
     local oldDuration = tonumber(data.duration)
     if not startedAt or not oldDuration then return nil end
 
-    -- If the selected rarity set changed, start a fresh hunting session.
+    -- If the selected rarity set changed, ignore the old window.
     local oldRarities = data.rarities
     if type(oldRarities) == "table" then
         local a, b = {}, {}
@@ -239,7 +244,7 @@ local function loadHuntTimer()
         for k in pairs(b) do if not a[k] then return nil end end
     end
 
-    -- A duration change intentionally starts a fresh session.
+    -- A duration change ignores the old window.
     if oldDuration ~= RARITY_DURATION then return nil end
     if os.time() - startedAt >= RARITY_DURATION then return nil end
 
@@ -250,32 +255,29 @@ end
 local function clearHuntTimerFile()
     if type(delfile) == "function" then
         pcall(delfile, TIMER_FILE)
-    elseif type(writefile) == "function" then
-        -- Fallback: leave an expired record. It will be replaced on the next run.
     end
 end
 
 huntStart = loadHuntTimer()
-if not huntStart then
-    huntStart = os.time()
-    lastSpawnAt = nil
-    saveHuntTimer()
-    print("[EGG KG] started a new " .. RARITY_DURATION .. "s rarity hunt")
+if huntStart then
+    print("[EGG KG] resumed hunt window; " .. math.max(0, os.time() - huntStart)
+        .. "s of " .. RARITY_DURATION .. "s has already elapsed")
 else
-    print("[EGG KG] resumed rarity hunt; " .. math.max(0, os.time() - huntStart)
-        .. "s has already elapsed")
+    print("[EGG KG] idle, waiting for a selected egg")
 end
 
 local function huntElapsed()
+    if not huntStart then return 0 end
     return math.max(0, os.time() - huntStart)
 end
 
 local function huntRemaining()
+    if not huntStart then return 0 end
     return math.max(0, RARITY_DURATION - huntElapsed())
 end
 
 local function huntActive()
-    return huntRemaining() > 0
+    return huntStart ~= nil and huntRemaining() > 0
 end
 
 local function sinceLastSpawn()
@@ -283,13 +285,30 @@ local function sinceLastSpawn()
     return math.max(0, os.time() - lastSpawnAt)
 end
 
+-- starts a new window, but only if one is not already running
+local function startHunt()
+    if huntActive() then return end
+    huntStart = os.time()
+    saveHuntTimer()
+    print("[EGG KG] selected egg found, started a " .. RARITY_DURATION .. "s window")
+end
+
 local function markSelectedSpawn()
     lastSpawnAt = os.time()
+    startHunt()
     saveHuntTimer()
 end
 
+-- ends the window once the time is up and goes back to waiting
+local function checkHuntExpiry()
+    if huntStart and not huntActive() then
+        huntStart = nil
+        clearHuntTimerFile()
+        print("[EGG KG] window ended, waiting for the next selected egg")
+    end
+end
+
 -- Put a small timer state object in Workspace so it is easy to inspect.
--- The saved timestamp above is the persistent source of truth across servers.
 local function setupWorkspaceTimer()
     pcall(function()
         local old = workspace:FindFirstChild("EggRarityHunt")
@@ -307,14 +326,14 @@ local function setupWorkspaceTimer()
             return x
         end
 
-        value("IntValue", "StartedAt", huntStart)
+        local vStarted   = value("IntValue", "StartedAt", huntStart or 0)
         value("IntValue", "Duration", RARITY_DURATION)
         value("StringValue", "SelectedRarities", table.concat(HOP_FOR, ", "))
-        value("IntValue", "Elapsed", huntElapsed())
-        value("IntValue", "Remaining", huntRemaining())
-        value("BoolValue", "Active", huntActive())
-        value("IntValue", "LastSpawnAt", lastSpawnAt or 0)
-        value("IntValue", "SinceLastSpawn", sinceLastSpawn() or -1)
+        local vElapsed   = value("IntValue", "Elapsed", huntElapsed())
+        local vRemaining = value("IntValue", "Remaining", huntRemaining())
+        local vActive    = value("BoolValue", "Active", huntActive())
+        local vLast      = value("IntValue", "LastSpawnAt", lastSpawnAt or 0)
+        local vSince     = value("IntValue", "SinceLastSpawn", sinceLastSpawn() or -1)
 
         local part = Instance.new("Part")
         part.Name = "TimerDisplay"
@@ -342,29 +361,25 @@ local function setupWorkspaceTimer()
         label.BackgroundTransparency = 0.25
         label.TextScaled = true
         label.Font = Enum.Font.GothamBold
-        label.Text = "RARITY HUNT\n" .. table.concat(HOP_FOR, " + ") .. "\n" .. huntRemaining() .. "s"
+        label.Text = "RARITY HUNT\n" .. table.concat(HOP_FOR, " + ") .. "\nWAITING FOR EGG"
         label.Parent = gui
 
         task.spawn(function()
-            while folder.Parent and huntActive() do
-                local elapsed = huntElapsed()
-                local remaining = huntRemaining()
-                folder.Elapsed.Value = elapsed
-                folder.Remaining.Value = remaining
-                folder.Active.Value = remaining > 0
-                folder.LastSpawnAt.Value = lastSpawnAt or 0
-                folder.SinceLastSpawn.Value = sinceLastSpawn() or -1
-                local spawnText = lastSpawnAt and ((sinceLastSpawn() or 0) .. "s since last spawn") or "no selected egg found yet"
-                label.Text = "RARITY HUNT\n" .. table.concat(HOP_FOR, " + ") .. "\n" .. remaining .. "s left | " .. spawnText
+            while folder.Parent do
+                vStarted.Value = huntStart or 0
+                vElapsed.Value = huntElapsed()
+                vRemaining.Value = huntRemaining()
+                vActive.Value = huntActive()
+                vLast.Value = lastSpawnAt or 0
+                vSince.Value = sinceLastSpawn() or -1
+
+                if huntActive() then
+                    local spawnText = lastSpawnAt and ((sinceLastSpawn() or 0) .. "s since last spawn") or "no selected egg found yet"
+                    label.Text = "RARITY HUNT\n" .. table.concat(HOP_FOR, " + ") .. "\n" .. huntRemaining() .. "s left | " .. spawnText
+                else
+                    label.Text = "RARITY HUNT\n" .. table.concat(HOP_FOR, " + ") .. "\nWAITING FOR EGG"
+                end
                 task.wait(1)
-            end
-            if folder.Parent then
-                folder.Elapsed.Value = huntElapsed()
-                folder.Remaining.Value = 0
-                folder.Active.Value = false
-                folder.LastSpawnAt.Value = lastSpawnAt or 0
-                folder.SinceLastSpawn.Value = sinceLastSpawn() or -1
-                label.Text = "RARITY HUNT\n" .. table.concat(HOP_FOR, " + ") .. "\nEXPIRED"
             end
         end)
     end)
@@ -464,23 +479,21 @@ local function serverLink()
         game.PlaceId, game.JobId)
 end
 
--- Returns one actual USERNAME currently in this server.
--- Player.Name is used, not DisplayName.
-local function getServerPlayer()
-    local localPlayer = Players.LocalPlayer
-
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= localPlayer then
-            return player.Name
-        end
+-- ---------------- players in server ----------------
+local function playerInfoText()
+    local me = Players.LocalPlayer
+    local all = Players:GetPlayers()
+    local others = {}
+    for _, p in ipairs(all) do
+        if p ~= me then others[#others + 1] = p end
     end
 
-    -- If you are alone, use your own username.
-    if localPlayer then
-        return localPlayer.Name
-    end
+    -- pick a random other player; fall back to yourself if you're alone
+    local pick = (#others > 0) and others[math.random(#others)] or me
+    local name = pick and pick.Name or "Unknown"
 
-    return "Unknown"
+    return string.format("👥 **%d/%d players** • e.g. **%s**",
+        #all, Players.MaxPlayers, name)
 end
 
 -- ---------------- watch list ----------------
@@ -577,25 +590,22 @@ local function sendAlert(info, kg, location)
     local eggName = info.display .. " Egg"
 
     local desc = "*" .. style.tag .. "*"
-    if SHOW_LOCATION and location and location ~= "" then
-        desc = desc .. "\n📍 **" .. location .. "**"
-    end
+    desc = desc .. "\n" .. playerInfoText()
 
     local kgText = formatKg(kg)
     local link = serverLink()
     local serverValue = link and ("[**Click to Join Server**](" .. link .. ")") or "**Unavailable**"
-    local serverPlayer = getServerPlayer()
 
     local embed = {
         title       = style.emoji .. "  " .. style.title .. "  " .. style.emoji,
         description = desc,
         color       = style.color,
         fields = {
-            { name = "🥚 Egg",    value = "**" .. eggName .. "**",       inline = true },
-            { name = "💎 Rarity", value = "**" .. info.tier .. "**",     inline = true },
-            { name = "👤 Player", value = "**" .. serverPlayer .. "**",  inline = true },
-            { name = "🔗 Server", value = serverValue,                   inline = false },
-            { name = "⚖️ EGG KG", value = "```" .. kgText .. "```",    inline = false },
+            { name = "🥚 Egg",    value = "**" .. eggName .. "**",    inline = true },
+            { name = "💎 Rarity", value = "**" .. info.tier .. "**",  inline = true },
+            { name = "🔗 Server", value = serverValue,                inline = true },
+            { name = "⚖️ EGG KG", value = "```" .. kgText .. "```",   inline = false },
+            { name = "🆔 Job ID", value = "```" .. (game.JobId ~= "" and game.JobId or "N/A") .. "```", inline = false },
         },
         footer    = { text = FOOTER_TEXT .. " • " .. info.tier .. " Alert" },
         timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ", os.time()),
@@ -642,10 +652,84 @@ if TEST_MODE then
 end
 
 -- ============================================================
+-- TEST BUTTON: sends the join link for the CURRENT server
+-- (works even when there is no rare egg in the server)
+-- ============================================================
+local function sendTestInvite()
+    local link = serverLink()
+    local names = {}
+    for _, p in ipairs(Players:GetPlayers()) do names[#names + 1] = p.Name end
+    local nameText = table.concat(names, ", ")
+    if #nameText > 900 then nameText = nameText:sub(1, 900) .. "..." end
+
+    post(WEBHOOKS.Secret, {
+        username = BOT_NAME,
+        avatar_url = (BOT_AVATAR ~= "") and BOT_AVATAR or nil,
+        content = "🧪 **Server link test**",
+        embeds = { {
+            title = "🧪  SERVER LINK TEST  🧪",
+            description = "*Manual test, no egg required.*",
+            color = 0x3498DB,
+            fields = {
+                { name = "🔗 Server", value = link and ("[**Click to Join Server**](" .. link .. ")") or "**Unavailable**", inline = false },
+                { name = "🆔 Job ID", value = "```" .. (game.JobId ~= "" and game.JobId or "N/A") .. "```", inline = false },
+                { name = "👥 Players (" .. #names .. "/" .. Players.MaxPlayers .. ")", value = "```" .. nameText .. "```", inline = false },
+            },
+            timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ", os.time()),
+        } },
+    })
+end
+
+local function makeTestButton()
+    local parent = (type(gethui) == "function" and gethui()) or game:GetService("CoreGui")
+
+    pcall(function()
+        local old = parent:FindFirstChild("EggTestGui")
+        if old then old:Destroy() end
+    end)
+
+    local gui = Instance.new("ScreenGui")
+    gui.Name = "EggTestGui"
+    gui.ResetOnSpawn = false
+    gui.Parent = parent
+
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.fromOffset(240, 50)
+    btn.AnchorPoint = Vector2.new(0.5, 0.5)
+    btn.Position = UDim2.fromScale(0.5, 0.5)
+    btn.BackgroundColor3 = Color3.fromRGB(52, 152, 219)
+    btn.TextColor3 = Color3.new(1, 1, 1)
+    btn.Font = Enum.Font.GothamBold
+    btn.TextSize = 18
+    btn.Text = "Send Server Link (Test)"
+    btn.Active = true
+    btn.Draggable = true   -- drag it out of the way if it blocks your view
+    btn.Parent = gui
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 8)
+    corner.Parent = btn
+
+    btn.MouseButton1Click:Connect(function()
+        btn.Text = "Sending..."
+        task.spawn(function()
+            local ok, err = pcall(sendTestInvite)
+            btn.Text = ok and "Sent!" or "Failed (see console)"
+            if not ok then warn("[EGG KG] test send error: " .. tostring(err)) end
+            task.wait(1.5)
+            btn.Text = "Send Server Link (Test)"
+        end)
+    end)
+end
+
+pcall(makeTestButton)
+
+-- ============================================================
 -- SERVER HOPPER
 -- ============================================================
 
-local targetCount = 0   -- total selected-rarity eggs seen in the last scan
+local targetCount = 0   -- total selected-rarity eggs seen in the last scan.
+local firstScanDone = false
 
 local function stopped()
     return type(getgenv) == "function" and getgenv().EGGKG_STOP == true
@@ -768,10 +852,14 @@ local hopping = false
 
 local function hopLoop()
     hopping = true
-    warn("[EGG KG] selected rarity egg in this server (" .. table.concat(HOP_FOR, ", ") .. "), hopping every " .. HOP_DELAY .. "s")
+    warn("[EGG KG] hunt window active (" .. table.concat(HOP_FOR, ", ") .. "), hopping every " .. HOP_DELAY .. "s")
 
-    -- let the webhook go out first
+    -- wait for the first scan so we know what's in this server
     local t0 = os.clock()
+    while not firstScanDone and os.clock() - t0 < 40 do task.wait(0.2) end
+
+    -- then let any webhook go out
+    t0 = os.clock()
     while (#queue > 0 or sendBusy) and os.clock() - t0 < 20 do task.wait(0.2) end
 
     while HOP_ENABLED and not stopped() and huntActive() do
@@ -805,10 +893,10 @@ local function hopLoop()
     end
 
     hopping = false
-    warn("[EGG KG] hopping stopped (no selected rarity here, or stopped by you)")
+    warn("[EGG KG] hopping stopped (window ended or stopped by you), waiting for the next egg")
 end
 
--- starts hopping for the entire active hunting window, even when this server has no selected egg
+-- starts hopping only while a hunt window is active (after a selected egg was found)
 task.spawn(function()
     while true do
         if HOP_ENABLED and not hopping and not stopped() and huntActive() then
@@ -852,9 +940,10 @@ local function scan()
                 local isNew = seen[uid] == nil
                 seen[uid] = now
 
-                if huntActive() and isNew and (ALERT_ON_START or not firstScan) then
+                if isNew and (ALERT_ON_START or not firstScan) then
                     local kg = eggKg(r)
                     if (not kg) or kg >= (info.minKg or 0) then
+                        -- a selected egg starts the window (if one isn't already running)
                         if RARE[info.tier] then
                             markSelectedSpawn()
                         end
@@ -869,6 +958,7 @@ local function scan()
 
     targetCount = selectedCount
     firstScan = false
+    firstScanDone = true
 
     for uid, t in pairs(seen) do
         if now - t > FORGET_SECONDS then seen[uid] = nil end
@@ -879,11 +969,10 @@ print("[EGG KG] running. Hopping " .. (HOP_ENABLED and "ON" or "OFF")
     .. " for: " .. table.concat(HOP_FOR, ", ")
     .. ". Custom entries: " .. #CUSTOM_EGGS)
 
-while huntActive() do
+-- runs forever: scan, and close the window when its time is up
+while true do
     local ok, err = pcall(scan)
     if not ok then warn("[EGG KG] scan error: " .. tostring(err)) end
+    checkHuntExpiry()
     task.wait(SCAN_INTERVAL)
 end
-
-print("[EGG KG] selected rarity hunt duration ended.")
-clearHuntTimerFile()
