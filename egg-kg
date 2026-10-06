@@ -42,6 +42,9 @@ local SHOW_LOCATION      = true   -- (no longer used in the embed; player info i
 local AUTO_BY_RARITY     = false  -- strict: only eggs from selected HOP_FOR lists are watched
 local TEST_MODE          = false  -- true: sends 3 sample alerts on start
 local KG_DECIMALS        = 0      -- 0 = "65K", 1 = "65.6K"  (use 2 to see e.g. "2.47M Kg")
+-- Redirect page that opens the roblox:// join link (upload join.html there).
+-- Leave "" to fall back to the old roblox.com link, which does NOT join the right server.
+local JOIN_PAGE          = "https://asaiya2.github.io/SEAWEBH/join.html"
 
 -- Minimum kg needed to send an alert, per tier (0 = always send).
 local MIN_KG = {
@@ -111,6 +114,7 @@ local ALL_RARE = {
         "RazorFang", "Gargoyle", "Centaur", "Pure Jellyfish", "Mutant Shark",
         { "Cosmic Skeleton", "Cosmic Skeleton Boss",},
         "Stag",
+        { "Starry Fox", "Cosmic Fox" },
     },
 
     Eternal = {
@@ -474,6 +478,9 @@ end
 
 local function serverLink()
     if game.JobId == "" then return nil end
+    if JOIN_PAGE ~= "" then
+        return string.format("%s?placeId=%d&jobId=%s", JOIN_PAGE, game.PlaceId, game.JobId)
+    end
     return string.format("https://www.roblox.com/games/start?placeId=%d&gameInstanceId=%s",
         game.PlaceId, game.JobId)
 end
