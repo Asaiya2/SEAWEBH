@@ -186,6 +186,7 @@ local EGG_BASE = {
     pegasus              = { income = 1.3e9, weight = 65000 },
     eternallunardragon   = { income = 250e6, weight = 60000 },
     cosmicskeleton       = { income = 45e6,  weight = 1000 },
+    celestialsunlion     = { income = 2e9,   weight = 17000 },  -- ESTIMATED from 3 screenshots, not from the wiki
 }
 
 -- variant / mutation multipliers. They ADD together: 1 + sum(mult - 1)
