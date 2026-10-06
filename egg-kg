@@ -60,6 +60,10 @@ local HOP_ENABLED   = true
 local HOP_DELAY     = 3           -- seconds between hops (raise to 5-6 if you get rate limited a lot)
 local MIN_PLAYERS   = 1           -- skip servers with fewer players than this (2 avoids nearly-dead servers)
 local MAX_PLAYERS   = 3           -- skip servers with more players than this (counted BEFORE you join, so you arrive as +1)
+-- MULTI-ACCOUNT: list the exact Roblox usernames of EVERY account running this script
+-- (same list, same order, on all of them). Each account then only hops to its own share
+-- of the servers, so they never pick the same one. Leave empty for a single account.
+local ACCOUNTS = { }   -- e.g. { "GGWORSTNOTIFIER", "SecondAccount", "ThirdAccount" }
 local VISITED_FILE  = "egg_hop_visited.json"
 local VISITED_TTL   = 900         -- don't revisit a server for this many seconds
 local POOL_FILE     = "egg_hop_pool_asc.json"
@@ -750,6 +754,35 @@ local function stopped()
     return type(getgenv) == "function" and getgenv().EGGKG_STOP == true
 end
 
+-- ---- multi-account split: each account only uses its own share of the servers ----
+local mySlot, slotCount = 1, 1
+do
+    local me = Players.LocalPlayer and Players.LocalPlayer.Name or ""
+    if #ACCOUNTS > 0 then
+        slotCount = #ACCOUNTS
+        local found = false
+        for i, n in ipairs(ACCOUNTS) do
+            if tostring(n):lower() == me:lower() then mySlot = i found = true end
+        end
+        if not found then
+            warn("[EGG KG] '" .. me .. "' is not in ACCOUNTS, it will share slot 1 and may collide")
+        end
+    end
+    if slotCount > 1 then
+        -- separate files per account so they don't overwrite each other
+        VISITED_FILE = "egg_hop_visited_" .. mySlot .. ".json"
+        POOL_FILE    = "egg_hop_pool_" .. mySlot .. ".json"
+        print("[EGG KG] multi-account: slot " .. mySlot .. " of " .. slotCount)
+    end
+end
+
+local function mySlice(id)
+    if slotCount <= 1 then return true end
+    local h = 0
+    for i = 1, #id do h = (h * 31 + id:byte(i)) % 1000003 end
+    return h % slotCount == mySlot - 1
+end
+
 -- ---- visited servers (so we don't go back) ----
 local function loadVisited()
     local t = {}
@@ -796,7 +829,7 @@ local function loadPool()
             if type(d) == "table" and os.time() - (tonumber(d.t) or 0) < POOL_TTL then
                 poolStamp = tonumber(d.t) or os.time()
                 for _, id in ipairs(d.ids or {}) do
-                    if not visited[id] and id ~= game.JobId then
+                    if not visited[id] and id ~= game.JobId and mySlice(id) then
                         pool[#pool + 1] = id
                     end
                 end
@@ -840,7 +873,8 @@ local function refillPool()
         for _, s in ipairs(data.data or {}) do
             local playing, maxP = tonumber(s.playing), tonumber(s.maxPlayers)
             if s.id ~= game.JobId and not visited[s.id] and playing and maxP
-                and playing >= MIN_PLAYERS and playing <= MAX_PLAYERS and playing < maxP - 1 then
+                and playing >= MIN_PLAYERS and playing <= MAX_PLAYERS and playing < maxP - 1
+                and mySlice(s.id) then
                 found[#found + 1] = { id = s.id, n = playing }
             end
         end
