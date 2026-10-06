@@ -1,16 +1,15 @@
 -- ============================================================
---  RARE EGG KG NOTIFIER + CONFIGURABLE RARITY SERVER HOPPER  (v4 + test button)
+--  RARE EGG KG NOTIFIER + CONFIGURABLE RARITY SERVER HOPPER  (v5)
 --  Standalone, made for auto execute.
 --  1) Watches the field only for the rarities selected in HOP_FOR and
---     posts a Discord embed with the egg's kg.
+--     posts a Discord embed with the egg's kg, mutation and money/s.
 --  2) Runs forever. It waits in the server until a selected egg
 --     appears. When one is found it sends the webhook and starts a
 --     5 minute window (eggs refresh every 5 minutes). During the
 --     window it hops servers, alerting on any selected egg it finds.
 --     When the window ends it stops hopping, stays in the current
 --     server and waits for the next selected egg, then repeats.
---  3) TEST BUTTON in the middle of the screen: sends the join link,
---     Job ID and player list of the CURRENT server (no egg needed).
+--  3) TEST BUTTONS in the middle of the screen.
 --  Stop hopping by hand: run   getgenv().EGGKG_STOP = true
 -- ============================================================
 
@@ -33,6 +32,24 @@ local ROLE_IDS = {
     Custom  = "",
 }
 
+-- Role pings by egg weight (kg). First match from the top wins.
+--   1,000,000 kg and up     -> 1M  - 100M
+--   100,000 to 999,999 kg   -> 100K - 1M
+--   1 to 99,999 kg          -> 1 - 100K
+local KG_PINGS = {
+    { min = 1000000, role = "1556964378094338079" },
+    { min = 100000,  role = "1556964342656671805" },
+    { min = 1,       role = "1556964297983397900" },
+}
+
+local function kgRole(kg)
+    if type(kg) ~= "number" then return "" end
+    for _, t in ipairs(KG_PINGS) do
+        if kg >= t.min then return t.role end
+    end
+    return ""
+end
+
 -- ===================== SETTINGS =====================
 local SCAN_INTERVAL      = 1      -- seconds between field scans
 local SEND_GAP           = 0.4    -- seconds between alerts (Discord rate limit)
@@ -42,6 +59,7 @@ local SHOW_LOCATION      = true   -- (no longer used in the embed; player info i
 local AUTO_BY_RARITY     = false  -- strict: only eggs from selected HOP_FOR lists are watched
 local TEST_MODE          = false  -- true: sends 3 sample alerts on start
 local KG_DECIMALS        = 0      -- 0 = "65K", 1 = "65.6K"  (use 2 to see e.g. "2.47M Kg")
+local DEBUG_DUMP         = true   -- true: prints every field of an alerted egg to the console (to find mutation data)
 -- Redirect page that opens the roblox:// join link (upload join.html there).
 -- Leave "" to fall back to the old roblox.com link, which does NOT join the right server.
 local JOIN_PAGE          = "https://worstasaiya.github.io/ASAIYASITE/join.html"
@@ -145,6 +163,39 @@ for _, tier in ipairs(HOP_FOR) do
         warn("[EGG KG] Unknown rarity in HOP_FOR: " .. tostring(tier))
     end
 end
+
+-- ===================== EGG VALUE (MONEY/S) DATA =====================
+-- base income per second, and the weight (kg) at which that income is reached.
+-- Eggs missing from this table show "Unknown" for Egg Value.
+-- Add more like:  eggname = { income = 123e6, weight = 5000 },
+-- (key = egg name in lowercase with no spaces or symbols)
+local EGG_BASE = {
+    gargoyle      = { income = 225e6, weight = 10000 },
+    purejellyfish = { income = 225e6, weight = 10000 },
+    centaur       = { income = 350e6, weight = 12000 },
+    razorfang     = { income = 350e6, weight = 12000 },
+    onitiger      = { income = 600e6, weight = 300 },
+    gorillaking   = { income = 880e6, weight = 100000 },
+    unicorn       = { income = 1e9,   weight = 1200 },
+    kitsune       = { income = 1.8e9, weight = 260 },
+    nightflame    = { income = 3e9,   weight = 160000 },
+    worldburner   = { income = 5e9,   weight = 120000 },
+    archangel     = { income = 5e9,   weight = 120000 },
+}
+
+-- variant / mutation multipliers. They ADD together: 1 + sum(mult - 1)
+-- key = name in lowercase with no spaces or symbols
+local BONUS = {
+    silver      = 1.2,
+    golden      = 2.5,
+    rainbow     = 3.5,
+    parasite    = 3,
+    bloom       = 1.25,
+    spiritbloom = 2.5,
+    fractured   = 2.75,
+    scrambled   = 2.75,
+    enchanted   = 2.85,
+}
 
 -- ===================== LOOK & FEEL =====================
 local STYLE = {
@@ -442,6 +493,97 @@ local function formatKg(kg)
     return text .. " Kg"
 end
 
+-- ---------------- debug dump + mutation ----------------
+local function dumpTable(t, indent, depth)
+    indent = indent or "  "
+    depth = depth or 0
+    for k, v in pairs(t) do
+        if type(v) == "table" and depth < 2 then
+            print(indent .. tostring(k) .. " = {")
+            dumpTable(v, indent .. "  ", depth + 1)
+            print(indent .. "}")
+        else
+            print(indent .. tostring(k) .. " = " .. tostring(v))
+        end
+    end
+end
+
+-- best guess at common field names; if your egg uses a different one,
+-- turn on DEBUG_DUMP, find the real name and add it here
+local MUTATION_KEYS = { "Mutation", "Mutations", "Variant", "Modifier", "Modifiers", "Trait", "Traits" }
+
+local function eggMutation(r)
+    for _, key in ipairs(MUTATION_KEYS) do
+        local v = r[key]
+        if v ~= nil and v ~= false and v ~= "" then
+            if type(v) == "table" then
+                local parts = {}
+                for k2, v2 in pairs(v) do
+                    if type(k2) == "string" then
+                        parts[#parts + 1] = k2
+                    elseif type(v2) == "table" then
+                        parts[#parts + 1] = tostring(v2.DisplayName or v2._id or "?")
+                    else
+                        parts[#parts + 1] = tostring(v2)
+                    end
+                end
+                if #parts > 0 then return table.concat(parts, ", ") end
+            else
+                return tostring(v)
+            end
+        end
+    end
+    return nil
+end
+
+-- ---------------- egg value (money/s) ----------------
+local MONEY_SUFFIX = { "", "K", "M", "B", "T", "Qa", "Qi" }
+
+local function formatMoney(n)
+    local i = 1
+    while n >= 1000 and i < #MONEY_SUFFIX do
+        n = n / 1000
+        i = i + 1
+    end
+    return string.format("$%.2f%s/s", n, MONEY_SUFFIX[i])
+end
+
+-- variants and mutations stack additively: 1 + sum(each multiplier - 1)
+local function bonusMult(mutation)
+    local total = 1
+    if mutation then
+        for name in tostring(mutation):gmatch("[^,]+") do
+            local m = BONUS[norm(name)]
+            if m then total = total + (m - 1) end
+        end
+    end
+    return total
+end
+
+-- returns income without bonuses, and income with bonuses (or nil if unknown)
+local function eggIncome(info, kg, mutation)
+    local b = EGG_BASE[norm(info.display)]
+    if not b or type(kg) ~= "number" or kg <= 0 then return nil end
+    local ratio = kg / b.weight
+    local weightMult
+    if ratio >= 1 then
+        weightMult = ratio ^ (37 / 60)   -- at or above base weight (checked up to 125x)
+    else
+        weightMult = ratio ^ (5 / 3)     -- below base weight
+    end
+    local base = b.income * weightMult
+    return base, base * bonusMult(mutation)
+end
+
+local function eggValueText(info, kg, mutation)
+    local base, final = eggIncome(info, kg, mutation)
+    if not base then return "Unknown" end
+    if mutation and final ~= base then
+        return formatMoney(base) .. " -> " .. formatMoney(final)
+    end
+    return formatMoney(final)
+end
+
 -- ---------------- asset / area names ----------------
 local entryCache = {}
 local function getEntry(cat)
@@ -602,16 +744,20 @@ local function post(url, payload)
     end
 end
 
-local function sendAlert(info, kg, location)
+local function sendAlert(info, kg, location, mutation)
     local style = STYLE[info.tier]
     local roleId = ROLE_IDS[info.tier]
     local mention = (roleId and roleId ~= "") and ("<@&" .. roleId .. "> ") or ""
+    local kgRoleId = kgRole(kg)
+    if kgRoleId ~= "" then mention = mention .. "<@&" .. kgRoleId .. "> " end
     local eggName = info.display .. " Egg"
 
     local desc = "*" .. style.tag .. "*"
     desc = desc .. "\n" .. playerInfoText()
 
     local kgText = formatKg(kg)
+    local mutationText = mutation or "NONE"
+    local valueText = eggValueText(info, kg, mutation)
     local link = serverLink()
     local serverValue = link and ("[**Click to Join Server**](" .. link .. ")") or "**Unavailable**"
 
@@ -620,10 +766,12 @@ local function sendAlert(info, kg, location)
         description = desc,
         color       = style.color,
         fields = {
-            { name = "🥚 Egg",    value = "**" .. eggName .. "**",    inline = true },
-            { name = "💎 Rarity", value = "**" .. info.tier .. "**",  inline = true },
-            { name = "🔗 Server", value = serverValue,                inline = true },
-            { name = "⚖️ EGG KG", value = "```" .. kgText .. "```",   inline = false },
+            { name = "🥚 Egg",           value = "**" .. eggName .. "**",    inline = true },
+            { name = "💎 Rarity",        value = "**" .. info.tier .. "**",  inline = true },
+            { name = "🔗 Server",        value = serverValue,                inline = true },
+            { name = "⚖️ Egg Kg",        value = "```" .. kgText .. "```",   inline = false },
+            { name = "🧬 Egg Mutation",  value = "**" .. mutationText .. "**", inline = false },
+            { name = "💰 Egg Value",     value = "```" .. valueText .. "```", inline = false },
         },
         footer    = { text = FOOTER_TEXT .. " • " .. info.tier .. " Alert" },
         timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ", os.time()),
@@ -650,7 +798,7 @@ task.spawn(function()
         local a = table.remove(queue, 1)
         if a then
             sendBusy = true
-            local ok, err = pcall(sendAlert, a.info, a.kg, a.location)
+            local ok, err = pcall(sendAlert, a.info, a.kg, a.location, a.mutation)
             if not ok then warn("[EGG KG] alert error: " .. tostring(err)) end
             sendBusy = false
             task.wait(SEND_GAP)
@@ -699,6 +847,85 @@ local function sendTestInvite()
     })
 end
 
+-- ============================================================
+-- SEND ALL MUTATIONS: every egg currently in the server that has a mutation
+-- ============================================================
+local function sendAllMutations()
+    if type(EggState) ~= "table" or type(EggState.ReadFieldEggs) ~= "function" then
+        error("EggState.ReadFieldEggs not available")
+    end
+
+    local ok, data = pcall(EggState.ReadFieldEggs)
+    if not (ok and type(data) == "table") then error("could not read field eggs") end
+    local raw = data.Records or data
+    if type(raw) ~= "table" then error("no egg records") end
+
+    local lines, scanned = {}, 0
+    for _, r in pairs(raw) do
+        if type(r) == "table" then
+            scanned = scanned + 1
+            local mutation = eggMutation(r)
+            if mutation then
+                local cat = r.AssetCategory or r.Category
+                local entry = getEntry(cat)
+                local name = (type(entry) == "table" and tostring(entry.DisplayName or cat))
+                    or tostring(cat or "Unknown")
+                local valueText = eggValueText({ display = name }, eggKg(r), mutation)
+                lines[#lines + 1] = string.format("**%s** • %s • 🧬 %s • 💰 %s • %s",
+                    name, formatKg(eggKg(r)), mutation, valueText, areaName(r.AreaId))
+            end
+        end
+    end
+
+    local link = serverLink()
+    local header = "🧬 **Mutation test**: " .. #lines .. " mutated egg(s) out of " .. scanned .. " scanned"
+
+    if #lines == 0 then
+        post(WEBHOOKS.Secret, {
+            username = BOT_NAME,
+            avatar_url = (BOT_AVATAR ~= "") and BOT_AVATAR or nil,
+            content = header .. "\nNo mutations found. If you expect some, turn on DEBUG_DUMP and check the real field name in MUTATION_KEYS.",
+        })
+        return
+    end
+
+    -- split into embeds under Discord's 4096-char description limit
+    local embeds, cur = {}, ""
+    local function flush()
+        if cur ~= "" then
+            embeds[#embeds + 1] = {
+                title = "🧬  MUTATED EGGS  🧬",
+                description = cur,
+                color = 0x2ECC71,
+            }
+            cur = ""
+        end
+    end
+    for _, line in ipairs(lines) do
+        if #cur + #line + 1 > 3800 then flush() end
+        cur = cur .. line .. "\n"
+    end
+    flush()
+
+    if link then
+        embeds[#embeds].fields = { { name = "🔗 Server", value = "[**Click to Join Server**](" .. link .. ")", inline = false } }
+    end
+    embeds[#embeds].timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ", os.time())
+
+    -- max 10 embeds per message; send 5 at a time to stay safe on total size
+    for i = 1, #embeds, 5 do
+        local batch = {}
+        for j = i, math.min(i + 4, #embeds) do batch[#batch + 1] = embeds[j] end
+        post(WEBHOOKS.Secret, {
+            username = BOT_NAME,
+            avatar_url = (BOT_AVATAR ~= "") and BOT_AVATAR or nil,
+            content = (i == 1) and header or nil,
+            embeds = batch,
+        })
+        task.wait(SEND_GAP)
+    end
+end
+
 local function makeTestButton()
     local parent = (type(gethui) == "function" and gethui()) or game:GetService("CoreGui")
 
@@ -712,33 +939,40 @@ local function makeTestButton()
     gui.ResetOnSpawn = false
     gui.Parent = parent
 
-    local btn = Instance.new("TextButton")
-    btn.Size = UDim2.fromOffset(240, 50)
-    btn.AnchorPoint = Vector2.new(0.5, 0.5)
-    btn.Position = UDim2.fromScale(0.5, 0.5)
-    btn.BackgroundColor3 = Color3.fromRGB(52, 152, 219)
-    btn.TextColor3 = Color3.new(1, 1, 1)
-    btn.Font = Enum.Font.GothamBold
-    btn.TextSize = 18
-    btn.Text = "Send Server Link (Test)"
-    btn.Active = true
-    btn.Draggable = true   -- drag it out of the way if it blocks your view
-    btn.Parent = gui
+    local function makeButton(text, yOffset, color, action)
+        local btn = Instance.new("TextButton")
+        btn.Size = UDim2.fromOffset(240, 50)
+        btn.AnchorPoint = Vector2.new(0.5, 0.5)
+        btn.Position = UDim2.new(0.5, 0, 0.5, yOffset)
+        btn.BackgroundColor3 = color
+        btn.TextColor3 = Color3.new(1, 1, 1)
+        btn.Font = Enum.Font.GothamBold
+        btn.TextSize = 18
+        btn.Text = text
+        btn.Active = true
+        btn.Draggable = true
+        btn.Parent = gui
 
-    local corner = Instance.new("UICorner")
-    corner.CornerRadius = UDim.new(0, 8)
-    corner.Parent = btn
+        local corner = Instance.new("UICorner")
+        corner.CornerRadius = UDim.new(0, 8)
+        corner.Parent = btn
 
-    btn.MouseButton1Click:Connect(function()
-        btn.Text = "Sending..."
-        task.spawn(function()
-            local ok, err = pcall(sendTestInvite)
-            btn.Text = ok and "Sent!" or "Failed (see console)"
-            if not ok then warn("[EGG KG] test send error: " .. tostring(err)) end
-            task.wait(1.5)
-            btn.Text = "Send Server Link (Test)"
+        btn.MouseButton1Click:Connect(function()
+            btn.Text = "Sending..."
+            task.spawn(function()
+                local ok, err = pcall(action)
+                btn.Text = ok and "Sent!" or "Failed (see console)"
+                if not ok then warn("[EGG KG] button error: " .. tostring(err)) end
+                task.wait(1.5)
+                btn.Text = text
+            end)
         end)
-    end)
+    end
+
+    -- new button, sits above the original
+    makeButton("Send all mutations", -60, Color3.fromRGB(46, 204, 113), sendAllMutations)
+    -- original button
+    makeButton("Send Server Link (Test)", 0, Color3.fromRGB(52, 152, 219), sendTestInvite)
 end
 
 pcall(makeTestButton)
@@ -999,7 +1233,11 @@ local function scan()
                         if RARE[info.tier] then
                             markSelectedSpawn()
                         end
-                        queue[#queue + 1] = { info = info, kg = kg, location = areaName(r.AreaId) }
+                        if DEBUG_DUMP then
+                            print("[EGG KG] RECORD DUMP for " .. info.display)
+                            dumpTable(r)
+                        end
+                        queue[#queue + 1] = { info = info, kg = kg, location = areaName(r.AreaId), mutation = eggMutation(r) }
                         print(string.format("[EGG KG] %s (%s) | %s | %s",
                             info.display, info.tier, formatKg(kg), areaName(r.AreaId)))
                     end
