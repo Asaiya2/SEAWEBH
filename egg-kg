@@ -44,7 +44,7 @@ local TEST_MODE          = false  -- true: sends 3 sample alerts on start
 local KG_DECIMALS        = 0      -- 0 = "65K", 1 = "65.6K"  (use 2 to see e.g. "2.47M Kg")
 -- Redirect page that opens the roblox:// join link (upload join.html there).
 -- Leave "" to fall back to the old roblox.com link, which does NOT join the right server.
-local JOIN_PAGE          = "https://asaiya2.github.io/SEAWEBH/join.html"
+local JOIN_PAGE          = "https://worstasaiya.github.io/ASAIYASITE/join.html"
 
 -- Minimum kg needed to send an alert, per tier (0 = always send).
 local MIN_KG = {
@@ -111,7 +111,7 @@ local TIMER_FILE = "egg_rarity_hunt_timer.json"
 -- ============================================================
 local ALL_RARE = {
     Secret = {
-        "RazorFang", "Gargoyle", "Centaur", "Mutant Shark",
+        "RazorFang", "Gargoyle", "Centaur", "Pure Jellyfish", "Mutant Shark",
         { "Cosmic Skeleton", "Cosmic Skeleton Boss",},
         "Stag",
         { "Starry Fox", "Cosmic Fox" },
