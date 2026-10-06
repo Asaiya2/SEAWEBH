@@ -59,10 +59,11 @@ local MIN_KG = {
 local HOP_ENABLED   = true
 local HOP_DELAY     = 3           -- seconds between hops (raise to 5-6 if you get rate limited a lot)
 local MIN_PLAYERS   = 1           -- skip servers with fewer players than this (2 avoids nearly-dead servers)
+local MAX_PLAYERS   = 3           -- skip servers with more players than this (counted BEFORE you join, so you arrive as +1)
 local VISITED_FILE  = "egg_hop_visited.json"
 local VISITED_TTL   = 900         -- don't revisit a server for this many seconds
 local POOL_FILE     = "egg_hop_pool_asc.json"
-local POOL_TTL      = 300         -- reuse a saved server list for this many seconds
+local POOL_TTL      = 60          -- reuse a saved server list for this many seconds
 local SERVER_PAGES  = 1           -- pages (100 servers each) to read per refill
 
 -- ===================== CUSTOM EGGS =====================
@@ -101,7 +102,7 @@ end
 -- ===================== PERSISTENT HUNT WINDOW =====================
 -- Length of the hopping window that starts when a selected egg is found.
 -- 300 = 5 minutes (eggs refresh every 5 minutes).
-local RARITY_DURATION = 300
+local RARITY_DURATION = 280
 
 -- This file survives script re-execution and teleporting to another server.
 local TIMER_FILE = "egg_rarity_hunt_timer.json"
@@ -840,13 +841,16 @@ local function refillPool()
         rateWait = 5
         poolStamp = os.time()
 
+        local found = {}
         for _, s in ipairs(data.data or {}) do
             local playing, maxP = tonumber(s.playing), tonumber(s.maxPlayers)
             if s.id ~= game.JobId and not visited[s.id] and playing and maxP
-                and playing >= MIN_PLAYERS and playing < maxP - 1 then
-                pool[#pool + 1] = s.id
+                and playing >= MIN_PLAYERS and playing <= MAX_PLAYERS and playing < maxP - 1 then
+                found[#found + 1] = { id = s.id, n = playing }
             end
         end
+        table.sort(found, function(x, y) return x.n < y.n end)   -- fewest players first
+        for _, f in ipairs(found) do pool[#pool + 1] = f.id end
 
         cursor = data.nextPageCursor
         if not cursor then break end
