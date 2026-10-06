@@ -111,7 +111,6 @@ local ALL_RARE = {
         "RazorFang", "Gargoyle", "Centaur", "Pure Jellyfish", "Mutant Shark",
         { "Cosmic Skeleton", "Cosmic Skeleton Boss",},
         "Stag",
-        { "Starry Fox", "Cosmic Fox" },
     },
 
     Eternal = {
