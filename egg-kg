@@ -86,7 +86,6 @@ local CUSTOM_EGGS = {
 --
 -- The script will ONLY use the rarities listed here.
 local HOP_FOR = {
-    "Secret",
     "Eternal",
     "Divine",
 }
