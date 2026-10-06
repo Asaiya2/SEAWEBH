@@ -346,7 +346,7 @@ local EGG_VALUES = {
     ["yeti"]            = "5M/s",
     ["tralaledon"]      = "32M/s",
     ["trex"]            = "25M/s",
-    ["Stag"]            = "145M/s",
+    ["stag"]            = "145M/s",
     
 
     -- Enchanted Forest: replace "VALUE NOT SET" with the real value (e.g. "1.5B/s").
