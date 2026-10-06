@@ -102,7 +102,7 @@ end
 -- ===================== PERSISTENT HUNT WINDOW =====================
 -- Length of the hopping window that starts when a selected egg is found.
 -- 300 = 5 minutes (eggs refresh every 5 minutes).
-local RARITY_DURATION = 280
+local RARITY_DURATION = 300
 
 -- This file survives script re-execution and teleporting to another server.
 local TIMER_FILE = "egg_rarity_hunt_timer.json"
@@ -427,20 +427,15 @@ end
 
 local KG_SUFFIXES = { "", "K", "M", "B", "T", "Qa", "Qi" }
 
+-- full number with commas, e.g. 1,092,052 Kg
 local function formatKg(kg)
     if not kg then return "?" end
-    local n = math.floor(math.max(kg, 0) + 0.5)
-    local i = 1
-    while n >= 1000 and i < #KG_SUFFIXES do
-        n = n / 1000
-        i = i + 1
-    end
-    if i == 1 then
-        return tostring(n) .. " Kg"
-    end
-    local mult = 10 ^ KG_DECIMALS
-    local v = math.floor(n * mult) / mult   -- cuts off, never rounds up
-    return string.format("%." .. KG_DECIMALS .. "f", v) .. KG_SUFFIXES[i] .. " Kg"
+    local text = string.format("%.0f", math.max(kg, 0))
+    local count
+    repeat
+        text, count = text:gsub("^(%d+)(%d%d%d)", "%1,%2")
+    until count == 0
+    return text .. " Kg"
 end
 
 -- ---------------- asset / area names ----------------
