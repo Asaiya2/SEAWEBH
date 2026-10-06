@@ -691,7 +691,6 @@ local function sendTestInvite()
             fields = {
                 { name = "🔗 Server", value = link and ("[**Click to Join Server**](" .. link .. ")") or "**Unavailable**", inline = false },
                 { name = "🆔 Job ID", value = "```" .. (game.JobId ~= "" and game.JobId or "N/A") .. "```", inline = false },
-                { name = "🔌 Join via executor", value = "```lua\n" .. joinSnippet() .. "\n```", inline = false },
                 { name = "📎 Direct link (paste in browser / Win+R)", value = "```" .. deepLink() .. "```", inline = false },
                 { name = "👥 Players (" .. #names .. "/" .. Players.MaxPlayers .. ")", value = "```" .. nameText .. "```", inline = false },
             },
