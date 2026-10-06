@@ -108,7 +108,7 @@ local TIMER_FILE = "egg_rarity_hunt_timer.json"
 -- ============================================================
 local ALL_RARE = {
     Secret = {
-        "RazorFang", "Gargoyle", "Centaur", "Pure Jellyfish", "Mutant Shark",
+        "RazorFang", "Centaur", "Pure Jellyfish", "Mutant Shark",
         { "Cosmic Skeleton", "Cosmic Skeleton Boss",},
         "Stag",
         { "Starry Fox", "Cosmic Fox" },
