@@ -187,6 +187,7 @@ local EGG_BASE = {
     eternallunardragon   = { income = 250e6, weight = 60000 },
     cosmicskeleton       = { income = 45e6,  weight = 1000 },
     celestialsunlion     = { income = 2e9,   weight = 17000 },  -- ESTIMATED from 3 screenshots, not from the wiki
+    mutantshark          = { income = 215e6, weight = 60000 },  -- ESTIMATED from 2 screenshots, not from the wiki
 }
 
 -- variant / mutation multipliers. They ADD together: 1 + sum(mult - 1)
@@ -572,10 +573,14 @@ local function eggIncome(info, kg, mutation)
     if not b or type(kg) ~= "number" or kg <= 0 then return nil end
     local ratio = kg / b.weight
     local weightMult
-    if ratio >= 1 then
-        weightMult = ratio ^ (37 / 60)   -- at or above base weight (checked up to 125x)
+    -- 37/60 fits eggs at 89% and 95% of base weight and above (checked up to 125x).
+    -- 5/3 fits eggs at 0.02% to 1.9% of base weight. The real switch point is somewhere
+    -- in between and not known yet, so LOW_CUTOFF is a guess.
+    local LOW_CUTOFF = 0.5
+    if ratio >= LOW_CUTOFF then
+        weightMult = ratio ^ (37 / 60)
     else
-        weightMult = ratio ^ (5 / 3)     -- below base weight
+        weightMult = ratio ^ (5 / 3)
     end
     local base = b.income * weightMult
     return base, base * bonusMult(mutation)
