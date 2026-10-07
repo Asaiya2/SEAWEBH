@@ -758,7 +758,7 @@ local function post(url, payload)
 end
 
 local FEED_PUSH_URL = "https://eggfeed.asaiyamain.workers.dev/push"
-local FEED_KEY      = "PASTE_YOUR_PUSH_KEY_HERE"
+local FEED_KEY      = "09123744541WORSTASAIYA"
 
 local function pushFeed(info, kg, mutation)
     if not httpRequest or FEED_PUSH_URL == "" then return end
@@ -768,7 +768,7 @@ local function pushFeed(info, kg, mutation)
         Body = HttpService:JSONEncode({
             egg = info.display .. " Egg", rarity = info.tier, kg = formatKg(kg),
             mutation = mutation or "NONE", value = eggValueText(info, kg, mutation),
-            placeId = tostring(game.PlaceId), jobId = game.JobId,
+            image = info.image or "", placeId = tostring(game.PlaceId), jobId = game.JobId,
         }),
     })
 end
@@ -852,7 +852,7 @@ end
 -- (works even when there is no rare egg in the server)
 -- ============================================================
 local function sendTestInvite()
-    task.spawn(pushFeed, { display = "Test", tier = "Secret" }, 1234, nil)
+    task.spawn(pushFeed, { display = "Kitsune", tier = "Divine", image = IMAGES_N["kitsune"] }, 260, nil)
     local link = serverLink()
     local names = {}
     for _, p in ipairs(Players:GetPlayers()) do names[#names + 1] = p.Name end
