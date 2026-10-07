@@ -4,6 +4,8 @@ print("ADDED IMAGES FOR NEW BIOME")
 --  RARE EGG NOTIFIER + BOT FEED + BUTTERFLY BLOOM ALERT
 --  Rare egg alerts now come from scanning the game's eggs
 --  (same source as the board feed). No chat detection.
+--  Each egg is alerted once per ALERT_COOLDOWN seconds, saved to a
+--  workspace file so rejoining / hopping can't send it twice.
 -- ============================================================
 
 -- ===================== WEBHOOKS =====================
@@ -57,6 +59,12 @@ local ALERT_EXISTING_ON_START = true   -- true: rare eggs already in the game wh
 local ALERT_FORGET_SECONDS    = 900    -- forget an egg this long after it disappears (so a flicker doesn't re-alert)
 local ALERT_SEND_GAP          = 0.3    -- seconds between alerts, to stay under Discord's webhook rate limit
 local SHOW_LOCATION           = true   -- adds the zone (Forest, Cosmic...) to the alert
+
+-- Persistent anti-duplicate: the same egg is never alerted again until this many
+-- seconds have passed since its last alert. The time is saved to a workspace file,
+-- so it survives rejoining, server hopping and re-executing the script.
+local ALERT_COOLDOWN = 290             -- 4 minutes 50 seconds
+local SENT_FILE      = "egg_alert_sent.json"
 
 -- Set to true to print every egg's raw category / resolved name to the console.
 -- Turn this on while Dr Scramble eggs are spawned to see their exact names.
@@ -884,6 +892,47 @@ local alerted       = {}    -- uid -> last time this egg was seen (os.clock)
 local alertedNoUid  = {}    -- egg name -> how many uid-less copies were already alerted
 local firstRareScan = true
 
+-- ---- persistent alert cooldown (saved in the workspace) ----
+-- Reads the saved file fresh every time so alerts claimed by another account
+-- on the same PC (same workspace folder) are seen too.
+local function loadSent()
+    local t = {}
+    pcall(function()
+        if isfile and readfile and isfile(SENT_FILE) then
+            local data = HttpService:JSONDecode(readfile(SENT_FILE))
+            local now = os.time()
+            for k, ts in pairs(data) do
+                if type(ts) == "number" and now - ts < 600 then
+                    t[k] = ts
+                end
+            end
+        end
+    end)
+    return t
+end
+
+-- Returns true (and saves the time) only if this egg has NOT been alerted
+-- within the last ALERT_COOLDOWN seconds. Otherwise returns false.
+local function claimEgg(key)
+    local sent = loadSent()
+    local now = os.time()
+    local last = sent[key]
+
+    if last and now - last < ALERT_COOLDOWN then
+        return false
+    end
+
+    sent[key] = now
+
+    pcall(function()
+        if writefile then
+            writefile(SENT_FILE, HttpService:JSONEncode(sent))
+        end
+    end)
+
+    return true
+end
+
 local function checkRare(eggs)
     local now = os.clock()
     local noUidNow = {}
@@ -896,7 +945,7 @@ local function checkRare(eggs)
 
             if e.uid ~= "" then
                 if alerted[e.uid] == nil then
-                    isNew = true
+                    isNew = claimEgg(e.uid)
                 end
                 alerted[e.uid] = now
             else
@@ -906,7 +955,7 @@ local function checkRare(eggs)
 
                 if n > (alertedNoUid[info.name] or 0) then
                     alertedNoUid[info.name] = n
-                    isNew = true
+                    isNew = claimEgg(game.JobId .. "|" .. info.name .. "#" .. n)
                 end
             end
 
