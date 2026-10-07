@@ -852,6 +852,7 @@ end
 -- (works even when there is no rare egg in the server)
 -- ============================================================
 local function sendTestInvite()
+    task.spawn(pushFeed, { display = "Test", tier = "Secret" }, 1234, nil)
     local link = serverLink()
     local names = {}
     for _, p in ipairs(Players:GetPlayers()) do names[#names + 1] = p.Name end
