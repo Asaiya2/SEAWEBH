@@ -81,7 +81,7 @@ local MAX_PLAYERS   = 3           -- skip servers with more players than this (c
 -- MULTI-ACCOUNT: list the exact Roblox usernames of EVERY account running this script
 -- (same list, same order, on all of them). Each account then only hops to its own share
 -- of the servers, so they never pick the same one. Leave empty for a single account.
-local ACCOUNTS = { "GGWORSTNOTIFIER", "THATONEBACONSAE1", "REDFSAE1", "aimmfhuaab" }
+local ACCOUNTS = { "GGWORSTNOTIFIER", "THATONEBACONSAE1", "REDFSAE1", "FourthUsername", "aimmfhuaab" }
 local VISITED_FILE  = "egg_hop_visited.json"
 local VISITED_TTL   = 900         -- don't revisit a server for this many seconds
 local POOL_FILE     = "egg_hop_pool_asc.json"
@@ -188,6 +188,8 @@ local EGG_BASE = {
     cosmicskeleton       = { income = 45e6,  weight = 1000 },
     celestialsunlion     = { income = 2e9,   weight = 17000 },  -- ESTIMATED from 3 screenshots, not from the wiki
     mutantshark          = { income = 215e6, weight = 60000 },  -- ESTIMATED from 2 screenshots, not from the wiki
+    starryfox            = { income = 750e6, weight = 1500 },   -- fitted from 4 screenshots (valid ~1,100 to 1,750 Kg)
+    cosmicfox            = { income = 750e6, weight = 1500 },   -- alias of Starry Fox
 }
 
 -- variant / mutation multipliers. They ADD together: 1 + sum(mult - 1)
