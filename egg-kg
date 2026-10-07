@@ -757,7 +757,24 @@ local function post(url, payload)
     end
 end
 
+local FEED_PUSH_URL = "https://eggfeed.asaiyamain.workers.dev/push"
+local FEED_KEY      = "PASTE_YOUR_PUSH_KEY_HERE"
+
+local function pushFeed(info, kg, mutation)
+    if not httpRequest or FEED_PUSH_URL == "" then return end
+    pcall(httpRequest, {
+        Url = FEED_PUSH_URL, Method = "POST",
+        Headers = { ["Content-Type"] = "application/json", ["x-key"] = FEED_KEY },
+        Body = HttpService:JSONEncode({
+            egg = info.display .. " Egg", rarity = info.tier, kg = formatKg(kg),
+            mutation = mutation or "NONE", value = eggValueText(info, kg, mutation),
+            placeId = tostring(game.PlaceId), jobId = game.JobId,
+        }),
+    })
+end
+
 local function sendAlert(info, kg, location, mutation)
+    task.spawn(pushFeed, info, kg, mutation)
     local style = STYLE[info.tier]
     local roleId = ROLE_IDS[info.tier]
     local mention = (roleId and roleId ~= "") and ("<@&" .. roleId .. "> ") or ""
