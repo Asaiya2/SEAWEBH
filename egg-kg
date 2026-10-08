@@ -50,6 +50,22 @@ local function kgRole(kg)
     return ""
 end
 
+-- Role pings by egg value (money/s, includes mutation bonuses). First match wins.
+local VALUE_PINGS = {
+    { min = 100e9, role = "1557748767032352788" },  -- 100B or more
+    { min = 10e9,  role = "1557748763710332949" },  -- 10B - 100B
+    { min = 1e9,   role = "1557748759973199902" },  -- 1B - 10B
+    { min = 1,     role = "1557748744005361704" },  -- 1 - 1B
+}
+
+local function valueRole(value)
+    if type(value) ~= "number" then return "" end
+    for _, t in ipairs(VALUE_PINGS) do
+        if value >= t.min then return t.role end
+    end
+    return ""
+end
+
 -- ===================== SETTINGS =====================
 local SCAN_INTERVAL      = 1      -- seconds between field scans
 local SEND_GAP           = 0.4    -- seconds between alerts (Discord rate limit)
@@ -771,7 +787,7 @@ local function pushFeed(info, kg, mutation)
         Body = HttpService:JSONEncode({
             egg = info.display .. " Egg", rarity = info.tier, kg = formatKg(kg),
             mutation = mutation or "NONE", value = eggValueText(info, kg, mutation),
-            image = info.image or "", placeId = tostring(game.PlaceId), jobId = game.JobId,
+            image = info.image or "", test = info.test == true, players = #Players:GetPlayers() .. "/" .. Players.MaxPlayers, placeId = tostring(game.PlaceId), jobId = game.JobId,
         }),
     })
 end
@@ -783,6 +799,10 @@ local function sendAlert(info, kg, location, mutation)
     local mention = (roleId and roleId ~= "") and ("<@&" .. roleId .. "> ") or ""
     local kgRoleId = kgRole(kg)
     if kgRoleId ~= "" then mention = mention .. "<@&" .. kgRoleId .. "> " end
+
+    local _, finalValue = eggIncome(info, kg, mutation)
+    local valueRoleId = valueRole(finalValue)
+    if valueRoleId ~= "" then mention = mention .. "<@&" .. valueRoleId .. "> " end
     local eggName = info.display .. " Egg"
 
     local desc = "*" .. style.tag .. "*"
@@ -855,7 +875,7 @@ end
 -- (works even when there is no rare egg in the server)
 -- ============================================================
 local function sendTestInvite()
-    task.spawn(pushFeed, { display = "Kitsune", tier = "Divine", image = IMAGES_N["kitsune"] }, 260, nil)
+    task.spawn(pushFeed, { display = "Kitsune", tier = "Divine", image = IMAGES_N["kitsune"], test = true }, 260, nil)
     local link = serverLink()
     local names = {}
     for _, p in ipairs(Players:GetPlayers()) do names[#names + 1] = p.Name end
