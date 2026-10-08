@@ -598,7 +598,7 @@ local function eggIncome(info, kg, mutation)
     local HIGH_CUTOFF = 125
     if ratio > HIGH_CUTOFF then
         weightMult = (HIGH_CUTOFF ^ (37 / 60)) * ((ratio / HIGH_CUTOFF) ^ 0.40)
-    elseif ratio >= LOW_CUTOFF then
+    elseif ratio > LOW_CUTOFF then
         weightMult = ratio ^ (37 / 60)
     else
         weightMult = ratio ^ (5 / 3)
