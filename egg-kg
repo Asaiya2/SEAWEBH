@@ -579,9 +579,9 @@ local function eggIncome(info, kg, mutation)
     -- 5/3 fits eggs at 0.02% to 1.9% of base weight. The real switch point is somewhere
     -- in between and not known yet, so LOW_CUTOFF is a guess.
     local LOW_CUTOFF = 0.5
-    local HIGH_CUTOFF = 100
+    local HIGH_CUTOFF = 125
     if ratio > HIGH_CUTOFF then
-        weightMult = (HIGH_CUTOFF ^ (37 / 60)) * ((ratio / HIGH_CUTOFF) ^ 0.459)
+        weightMult = (HIGH_CUTOFF ^ (37 / 60)) * ((ratio / HIGH_CUTOFF) ^ 0.40)
     elseif ratio >= LOW_CUTOFF then
         weightMult = ratio ^ (37 / 60)
     else
