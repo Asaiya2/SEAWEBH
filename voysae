@@ -16,6 +16,39 @@
 
 if not game:IsLoaded() then game.Loaded:Wait() end
 
+-- ===================== ANTI-AFK =====================
+do
+    local Players     = game:GetService("Players")
+    local VirtualUser = game:GetService("VirtualUser")
+
+    local lp = Players.LocalPlayer
+    while not lp do task.wait() lp = Players.LocalPlayer end
+
+    -- 1) kill the game's own idle-kick connections if the executor supports it
+    local GC = getconnections or get_signal_cons
+    if GC then
+        pcall(function()
+            for _, v in pairs(GC(lp.Idled)) do
+                if v.Disable then
+                    v:Disable()
+                elseif v.Disconnect then
+                    v:Disconnect()
+                end
+            end
+        end)
+    end
+
+    -- 2) fallback: always fake input when Roblox fires Idled
+    lp.Idled:Connect(function()
+        pcall(function()
+            VirtualUser:CaptureController()
+            VirtualUser:ClickButton2(Vector2.new())
+        end)
+    end)
+
+    print("[EGG KG] anti-AFK enabled")
+end
+
 -- ===================== WEBHOOKS =====================
 -- Paste your webhook URLs (Discord: channel settings > Integrations > Webhooks).
 local WEBHOOKS = {
