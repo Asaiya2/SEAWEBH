@@ -79,7 +79,7 @@ local KG_DECIMALS        = 0      -- 0 = "65K", 1 = "65.6K"  (use 2 to see e.g. 
 local DEBUG_DUMP         = true   -- true: prints every field of an alerted egg to the console (to find mutation data)
 -- Redirect page that opens the roblox:// join link (upload join.html there).
 -- Leave "" to fall back to the old roblox.com link, which does NOT join the right server.
-local JOIN_PAGE          = "https://worstasaiya.github.io/ASAIYASITE/join.html"
+local JOIN_PAGE          = "https://worstasaiya.github.io/rejoin/rejoin.html"
 
 -- Minimum kg needed to send an alert, per tier (0 = always send).
 local MIN_KG = {
@@ -779,15 +779,6 @@ end
 
 local FEED_PUSH_URL = "https://eggfeed.asaiyamain.workers.dev/push"
 local FEED_KEY      = "09123744541WORSTASAIYA"
-local QUIET_ACCOUNTS = { "GGWORSTNOTIFIER", "THATONEBACONSAE1", "REDFSAE1", "WORST_SAE1", "aimmfhuaab", "REDFSAE2", "REDFSAE3", "REDFSAE4", "REDFSAE5", "REDFSAE6", "VOYSAE1", "VOYSAE2" }
-
-local function isQuiet()
-    local me = (Players.LocalPlayer and Players.LocalPlayer.Name or ""):lower()
-    for _, n in ipairs(QUIET_ACCOUNTS) do
-        if n:lower() == me then return true end
-    end
-    return false
-end
 
 local function pushFeed(info, kg, mutation)
     if not httpRequest or FEED_PUSH_URL == "" then return end
