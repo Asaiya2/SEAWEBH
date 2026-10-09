@@ -45,7 +45,7 @@ local ROLE_IDS = {
 --   100,000 to 999,999 kg   -> 100K - 1M
 --   1 to 99,999 kg          -> 1 - 100K
 local KG_PINGS = {
-    { min = 1000000, role = " " },
+    { min = 10000000, role = "1557926807251193986" },
     { min = 100000,  role = " " },
     { min = 1,       role = " " },
 }
@@ -60,10 +60,10 @@ end
 
 -- Role pings by egg value (money/s, includes mutation bonuses). First match wins.
 local VALUE_PINGS = {
-    { min = 100e9, role = "1557748767032352788" },  -- 100B or more
-    { min = 10e9,  role = "1557748763710332949" },  -- 10B - 100B
-    { min = 1e9,   role = "1557748759973199902" },  -- 1B - 10B
-    { min = 1,     role = "1557748744005361704" },  -- 1 - 1B
+    { min = 100e9, role = "1557923158764290048" },  -- 100B or more
+    { min = 5e9,  role = "1557923158764290048" },  -- 5B - 100B
+    { min = 1e9,   role = "1557926807251193986" },  -- 1B - 10B
+    { min = 1,     role = "1557926807251193986" },  -- 1 - 1B
 }
 
 local function valueRole(value)
