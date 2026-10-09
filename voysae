@@ -1,6 +1,6 @@
 -- Voysae
 -- ============================================================
---  RARE EGG KG NOTIFIER + CONFIGURABLE RARITY SERVER HOPPER  (v5)
+--  RARE EGG KG NOTIFIER + CONFIGURABLE RARITY SERVER HOPPER  (v5.1, teleport fix)
 --  Standalone, made for auto execute.
 --  1) Watches the field only for the rarities selected in HOP_FOR and
 --     posts a Discord embed with the egg's kg, mutation and money/s.
@@ -12,6 +12,12 @@
 --     server and waits for the next selected egg, then repeats.
 --  3) TEST BUTTONS in the middle of the screen.
 --  Stop hopping by hand: run   getgenv().EGGKG_STOP = true
+--
+--  FIXES for "Teleport Failed (Error Code: 769)":
+--   - slower hop delay + random jitter
+--   - longer wait for a teleport to finish before trying another
+--   - backoff after EVERY failed teleport (grows with each failure in a row)
+--   - fresher server list (shorter POOL_TTL)
 -- ============================================================
 
 if not game:IsLoaded() then game.Loaded:Wait() end
@@ -91,7 +97,9 @@ local MIN_KG = {
 -- ===================== SERVER HOPPING =====================
 -- HOP_FOR above determines which rarities trigger hopping.
 local HOP_ENABLED   = true
-local HOP_DELAY     = 3           -- seconds between hops (raise to 5-6 if you get rate limited a lot)
+local HOP_DELAY     = 6           -- FIX: was 3. Seconds between hops (raise to 8-10 if error 769 still shows up)
+local HOP_JITTER    = 2           -- FIX: extra random 0-2s per hop so your accounts don't all fire at the same moment
+local TELEPORT_WAIT = 30          -- FIX: was 15. How long to wait for a teleport before assuming it failed
 local MIN_PLAYERS   = 1           -- skip servers with fewer players than this (2 avoids nearly-dead servers)
 local MAX_PLAYERS   = 3           -- skip servers with more players than this (counted BEFORE you join, so you arrive as +1)
 -- MULTI-ACCOUNT: list the exact Roblox usernames of EVERY account running this script
@@ -101,7 +109,7 @@ local ACCOUNTS = { "GGWORSTNOTIFIER", "THATONEBACONSAE1", "REDFSAE1", "WORST_SAE
 local VISITED_FILE  = "egg_hop_visited.json"
 local VISITED_TTL   = 900         -- don't revisit a server for this many seconds
 local POOL_FILE     = "egg_hop_pool_asc.json"
-local POOL_TTL      = 60          -- reuse a saved server list for this many seconds
+local POOL_TTL      = 25          -- FIX: was 60. Fresher list = fewer dead servers (don't go much lower with 12 accounts, or you get 429s)
 local SERVER_PAGES  = 1           -- pages (100 servers each) to read per refill
 
 -- ===================== CUSTOM EGGS =====================
@@ -1180,19 +1188,28 @@ loadPool()
 -- ---- teleport + hop loop ----
 local teleporting, floodUntil = false, 0
 
+-- FIX: back off after EVERY failed teleport (error 769 included), and back off longer
+-- the more failures happen in a row. A successful teleport ends this script and the next
+-- server starts at 0, so there is no need to reset it.
+local failStreak = 0
+
 TeleportService.TeleportInitFailed:Connect(function(_, result, msg)
     teleporting = false
-    warn("[EGG KG] teleport failed: " .. tostring(result) .. " " .. tostring(msg))
+    failStreak = failStreak + 1
+    local backoff = math.min(5 * failStreak, 30)          -- 5s, 10s, 15s ... max 30s
     if result == Enum.TeleportResult.Flooded then
-        floodUntil = os.clock() + 10
+        backoff = math.max(backoff, 15)
     end
+    floodUntil = os.clock() + backoff
+    warn("[EGG KG] teleport failed (" .. tostring(result) .. ", streak " .. failStreak
+        .. "), waiting " .. backoff .. "s. " .. tostring(msg))
 end)
 
 local hopping = false
 
 local function hopLoop()
     hopping = true
-    warn("[EGG KG] hunt window active (" .. table.concat(HOP_FOR, ", ") .. "), hopping every " .. HOP_DELAY .. "s")
+    warn("[EGG KG] hunt window active (" .. table.concat(HOP_FOR, ", ") .. "), hopping every ~" .. HOP_DELAY .. "s")
 
     -- wait for the first scan so we know what's in this server
     local t0 = os.clock()
@@ -1203,10 +1220,12 @@ local function hopLoop()
     while (#queue > 0 or sendBusy) and os.clock() - t0 < 20 do task.wait(0.2) end
 
     while HOP_ENABLED and not stopped() and huntActive() do
-        task.wait(HOP_DELAY)
+        -- FIX: random jitter so the accounts don't all hit Roblox at the same moment
+        task.wait(HOP_DELAY + math.random() * HOP_JITTER)
         if not huntActive() then break end
 
         if os.clock() < floodUntil then task.wait(floodUntil - os.clock()) end
+        if not huntActive() then break end
         if #pool == 0 then refillPool() end
 
         if #pool > 0 then
@@ -1222,10 +1241,18 @@ local function hopLoop()
             end)
             if not ok then
                 teleporting = false
+                failStreak = failStreak + 1          -- FIX: count errors thrown directly by the call too
+                floodUntil = os.clock() + math.min(5 * failStreak, 30)
                 warn("[EGG KG] teleport error: " .. tostring(err))
             end
             -- a successful teleport ends this script; wait for a failure or a timeout
-            while teleporting and os.clock() - tp0 < 15 do task.wait(0.2) end
+            -- FIX: wait longer (TELEPORT_WAIT) so a slow teleport is not overlapped by a new one
+            while teleporting and os.clock() - tp0 < TELEPORT_WAIT do task.wait(0.2) end
+            if teleporting then
+                -- timed out without success or failure: treat it as a failure too
+                failStreak = failStreak + 1
+                floodUntil = os.clock() + math.min(5 * failStreak, 30)
+            end
             teleporting = false
         else
             warn("[EGG KG] no servers available, retrying")
