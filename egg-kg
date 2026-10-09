@@ -1,3 +1,4 @@
+-- Voysae
 -- ============================================================
 --  RARE EGG KG NOTIFIER + CONFIGURABLE RARITY SERVER HOPPER  (v5)
 --  Standalone, made for auto execute.
@@ -778,6 +779,15 @@ end
 
 local FEED_PUSH_URL = "https://eggfeed.asaiyamain.workers.dev/push"
 local FEED_KEY      = "09123744541WORSTASAIYA"
+local QUIET_ACCOUNTS = { "GGWORSTNOTIFIER", "THATONEBACONSAE1", "REDFSAE1", "WORST_SAE1", "aimmfhuaab", "REDFSAE2", "REDFSAE3", "REDFSAE4", "REDFSAE5", "REDFSAE6", "VOYSAE1", "VOYSAE2" }
+
+local function isQuiet()
+    local me = (Players.LocalPlayer and Players.LocalPlayer.Name or ""):lower()
+    for _, n in ipairs(QUIET_ACCOUNTS) do
+        if n:lower() == me then return true end
+    end
+    return false
+end
 
 local function pushFeed(info, kg, mutation)
     if not httpRequest or FEED_PUSH_URL == "" then return end
