@@ -18,10 +18,10 @@ if not game:IsLoaded() then game.Loaded:Wait() end
 -- ===================== WEBHOOKS =====================
 -- Paste your webhook URLs (Discord: channel settings > Integrations > Webhooks).
 local WEBHOOKS = {
-    Secret  = "https://discord.com/api/webhooks/1556825366956609629/Rkfj6fH6fLobKN3Q1NnzgHXnPGZuhDDjDcN9dDO27NeMbtn8Qj_saLoces-f7zK_Z4w4",
-    Eternal = "https://discord.com/api/webhooks/1556825366956609629/Rkfj6fH6fLobKN3Q1NnzgHXnPGZuhDDjDcN9dDO27NeMbtn8Qj_saLoces-f7zK_Z4w4",
-    Divine  = "https://discord.com/api/webhooks/1556825366956609629/Rkfj6fH6fLobKN3Q1NnzgHXnPGZuhDDjDcN9dDO27NeMbtn8Qj_saLoces-f7zK_Z4w4",
-    Custom  = "https://discord.com/api/webhooks/1556825366956609629/Rkfj6fH6fLobKN3Q1NnzgHXnPGZuhDDjDcN9dDO27NeMbtn8Qj_saLoces-f7zK_Z4w4",
+    Secret  = "https://discord.com/api/webhooks/1557916571718909952/wgj2OPzlegW9j0oITUtkv-CAJFoYgUrggczqMCqicyixlHvgj8VBSYA5IOGrxe8j5wFB",
+    Eternal = "https://discord.com/api/webhooks/1557916571718909952/wgj2OPzlegW9j0oITUtkv-CAJFoYgUrggczqMCqicyixlHvgj8VBSYA5IOGrxe8j5wFB",
+    Divine  = "https://discord.com/api/webhooks/1557916571718909952/wgj2OPzlegW9j0oITUtkv-CAJFoYgUrggczqMCqicyixlHvgj8VBSYA5IOGrxe8j5wFB",
+    Custom  = "https://discord.com/api/webhooks/1557916571718909952/wgj2OPzlegW9j0oITUtkv-CAJFoYgUrggczqMCqicyixlHvgj8VBSYA5IOGrxe8j5wFB",
 }
 
 -- Role pings. Leave "" to not ping that tier.
@@ -37,9 +37,9 @@ local ROLE_IDS = {
 --   100,000 to 999,999 kg   -> 100K - 1M
 --   1 to 99,999 kg          -> 1 - 100K
 local KG_PINGS = {
-    { min = 1000000, role = "1556964378094338079" },
-    { min = 100000,  role = "1556964342656671805" },
-    { min = 1,       role = "1556964297983397900" },
+    { min = 10000000, role = "1557926807251193986" },
+    { min = 100000,  role = " " },
+    { min = 1,       role = " " },
 }
 
 local function kgRole(kg)
@@ -52,10 +52,10 @@ end
 
 -- Role pings by egg value (money/s, includes mutation bonuses). First match wins.
 local VALUE_PINGS = {
-    { min = 100e9, role = "1557748767032352788" },  -- 100B or more
-    { min = 10e9,  role = "1557748763710332949" },  -- 10B - 100B
-    { min = 1e9,   role = "1557748759973199902" },  -- 1B - 10B
-    { min = 1,     role = "1557748744005361704" },  -- 1 - 1B
+    { min = 100e9, role = "1557923158764290048" },  -- 100B or more
+    { min = 5e9,  role = "1557923158764290048" },  -- 5B - 100B
+    { min = 1e9,   role = "1557926807251193986" },  -- 1B - 10B
+    { min = 1,     role = "1557926807251193986" },  -- 1 - 1B
 }
 
 local function valueRole(value)
@@ -97,7 +97,7 @@ local MAX_PLAYERS   = 3           -- skip servers with more players than this (c
 -- MULTI-ACCOUNT: list the exact Roblox usernames of EVERY account running this script
 -- (same list, same order, on all of them). Each account then only hops to its own share
 -- of the servers, so they never pick the same one. Leave empty for a single account.
-local ACCOUNTS = { "GGWORSTNOTIFIER", "THATONEBACONSAE1", "REDFSAE1", "WORST_SAE1", "aimmfhuaab", "REDFSAE2", "REDFSAE3", "REDFSAE4", "REDFSAE5", "REDFSAE6" }
+local ACCOUNTS = { "GGWORSTNOTIFIER", "THATONEBACONSAE1", "REDFSAE1", "WORST_SAE1", "aimmfhuaab", "REDFSAE2", "REDFSAE3", "REDFSAE4", "REDFSAE5", "REDFSAE6", "VOYSAE1", "VOYSAE2" }
 local VISITED_FILE  = "egg_hop_visited.json"
 local VISITED_TTL   = 900         -- don't revisit a server for this many seconds
 local POOL_FILE     = "egg_hop_pool_asc.json"
