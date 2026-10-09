@@ -1,11 +1,3 @@
-print("VOYSAE")
-print("VOYSAE")
-print("VOYSAE")
-print("VOYSAE")
-print("VOYSAE")
-print("VOYSAE")
-print("VOYSAE")
-print("VOYSAE")
 -- ============================================================
 --  RARE EGG KG NOTIFIER + CONFIGURABLE RARITY SERVER HOPPER  (v5)
 --  Standalone, made for auto execute.
@@ -1328,7 +1320,3 @@ while true do
     checkHuntExpiry()
     task.wait(SCAN_INTERVAL)
 end
-print("VOYSAE EXECUTED")
-print("VOYSAE EXECUTED")
-print("VOYSAE EXECUTED")
-print("VOYSAE EXECUTED")
