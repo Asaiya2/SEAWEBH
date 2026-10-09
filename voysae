@@ -1,18 +1,16 @@
--- ============================================================
---  RARE EGG KG NOTIFIER + CONFIGURABLE RARITY SERVER HOPPER  (v5)
---  Standalone, made for auto execute.
---  1) Watches the field only for the rarities selected in HOP_FOR and
---     posts a Discord embed with the egg's kg, mutation and money/s.
---  2) Runs forever. It waits in the server until a selected egg
---     appears. When one is found it sends the webhook and starts a
---     5 minute window (eggs refresh every 5 minutes). During the
---     window it hops servers, alerting on any selected egg it finds.
---     When the window ends it stops hopping, stays in the current
---     server and waits for the next selected egg, then repeats.
---  3) TEST BUTTONS in the middle of the screen.
---  Stop hopping by hand: run   getgenv().EGGKG_STOP = true
--- ============================================================
-
+print("VOYSAE")
+print("VOYSAE")
+print("VOYSAE")
+print("VOYSAE")
+print("VOYSAE")
+print("VOYSAE")
+print("VOYSAE")
+print("VOYSAE")
+print("VOYSAE")
+print("VOYSAE")
+print("VOYSAE")
+print("VOYSAE")
+print("VOYSAE")
 if not game:IsLoaded() then game.Loaded:Wait() end
 
 -- ===================== WEBHOOKS =====================
