@@ -240,7 +240,7 @@ local STYLE = {
 
 local BOT_NAME    = "WORST • Steal An Egg"
 local BOT_AVATAR  = "https://github.com/Asaiya2/steal-an-egg/blob/main/neW.png?raw=true"
-local FOOTER_TEXT = "https://discord.gg/W0RST"
+local FOOTER_TEXT = "Voysae's personal Notifier"
 
 local IMAGES = {
     ["kitsune"]        = "https://asaiya2.github.io/steal-an-egg/Kitsune.png",
