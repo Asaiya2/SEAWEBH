@@ -121,7 +121,7 @@ local MAX_PLAYERS   = 3           -- skip servers with more players than this (c
 -- MULTI-ACCOUNT: list the exact Roblox usernames of EVERY account running this script
 -- (same list, same order, on all of them). Each account then only hops to its own share
 -- of the servers, so they never pick the same one. Leave empty for a single account.
-local ACCOUNTS = { "GGWORSTNOTIFIER", "REDFSAE4", "REDFSAE5", "REDFSAE6", "VOYSAE1", "VOYSAE2", "VOYSAE3", "VOYSAE4", "VOYSAE5" }
+local ACCOUNTS = { "GGWORSTNOTIFIER", "REDFSAE4", "REDFSAE5", "REDFSAE6", "VOYSAE1", "VOYSAE2", "VOYSAE3", "VOYSAE4", "VOYSAE5", "worstB1", "WORSTB2", WORSTB3" }
 local VISITED_FILE  = "egg_hop_visited.json"
 local VISITED_TTL   = 900         -- don't revisit a server for this many seconds
 local POOL_FILE     = "egg_hop_pool_asc.json"
@@ -1570,7 +1570,16 @@ local function hopLoop()
         if #pool == 0 then refillPool() end
 
         if #pool > 0 then
-            local id = table.remove(pool, 1)   -- emptiest server first
+            -- first attempt: emptiest server. After any failed hop: random server from the pool
+            local idx = 1
+            if failStreak > 0 then
+                idx = math.random(#pool)
+                print("[EGG KG] previous hop failed, picking a random server")
+            end
+            local id = table.remove(pool, idx)
+            visited[id] = os.time()
+            saveVisited()
+            savePool()
             visited[id] = os.time()
             saveVisited()
             savePool()
