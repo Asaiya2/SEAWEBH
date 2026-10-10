@@ -1570,7 +1570,6 @@ local function hopLoop()
         if #pool == 0 then refillPool() end
 
         if #pool > 0 then
-                    if #pool > 0 then
             -- first attempt: emptiest server. After any failed hop: random server from the pool
             local idx = 1
             if failStreak > 0 then
