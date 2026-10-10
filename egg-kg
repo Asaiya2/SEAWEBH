@@ -1,6 +1,6 @@
 -- Voysae
 -- ============================================================
---  RARE EGG KG NOTIFIER + CONFIGURABLE RARITY SERVER HOPPER  (v5.1, teleport fix)
+--  RARE EGG KG NOTIFIER + CONFIGURABLE RARITY SERVER HOPPER  (v5.2, scramble tracker)
 --  Standalone, made for auto execute.
 --  1) Watches the field only for the rarities selected in HOP_FOR and
 --     posts a Discord embed with the egg's kg, mutation and money/s.
@@ -11,23 +11,30 @@
 --     When the window ends it stops hopping, stays in the current
 --     server and waits for the next selected egg, then repeats.
 --  3) TEST BUTTONS in the middle of the screen.
+--  4) SCRAMBLE TRACKER (new in v5.2):
+--     - When the Dr. Scramble boss event is running in the server, it posts
+--       ONE message (join link + phase + boss HP) and edits that same message
+--       every 10 seconds while the boss is alive.
+--     - Boss dies (Phase = Defeated): the message is edited to "Boss Dead."
+--     - If a rare egg makes the script hop away: the message is edited right
+--       before the teleport to say "Not in server anymore".
+--     - Every edit refreshes a "Last updated" time, so a message that stopped
+--       updating (account closed or crashed) shows how stale it is.
+--     - Scramble NEVER starts hopping by itself. Only a listed rare egg does.
 --  Stop hopping by hand: run   getgenv().EGGKG_STOP = true
---
---  FIXES for "Teleport Failed (Error Code: 769)":
---   - slower hop delay + random jitter
---   - longer wait for a teleport to finish before trying another
---   - backoff after EVERY failed teleport (grows with each failure in a row)
---   - fresher server list (shorter POOL_TTL)
 -- ============================================================
 
 if not game:IsLoaded() then game.Loaded:Wait() end
+
 -- ===================== WEBHOOKS =====================
--- Paste your webhook URLs (Discord: channel settings > Integrations > Webhooks).
+-- ONE webhook used for everything. Change it here to change every alert.
+local DEFAULT_WEBHOOK = "https://discord.com/api/webhooks/1557916571718909952/wgj2OPzlegW9j0oITUtkv-CAJFoYgUrggczqMCqicyixlHvgj8VBSYA5IOGrxe8j5wFB"
+
 local WEBHOOKS = {
-    Secret  = "https://discord.com/api/webhooks/1557916571718909952/wgj2OPzlegW9j0oITUtkv-CAJFoYgUrggczqMCqicyixlHvgj8VBSYA5IOGrxe8j5wFB",
-    Eternal = "https://discord.com/api/webhooks/1557916571718909952/wgj2OPzlegW9j0oITUtkv-CAJFoYgUrggczqMCqicyixlHvgj8VBSYA5IOGrxe8j5wFB",
-    Divine  = "https://discord.com/api/webhooks/1557916571718909952/wgj2OPzlegW9j0oITUtkv-CAJFoYgUrggczqMCqicyixlHvgj8VBSYA5IOGrxe8j5wFB",
-    Custom  = "https://discord.com/api/webhooks/1557916571718909952/wgj2OPzlegW9j0oITUtkv-CAJFoYgUrggczqMCqicyixlHvgj8VBSYA5IOGrxe8j5wFB",
+    Secret  = DEFAULT_WEBHOOK,
+    Eternal = DEFAULT_WEBHOOK,
+    Divine  = DEFAULT_WEBHOOK,
+    Custom  = DEFAULT_WEBHOOK,
 }
 
 -- Role pings. Leave "" to not ping that tier.
@@ -38,10 +45,13 @@ local ROLE_IDS = {
     Custom  = "",
 }
 
+-- trims spaces so a role of " " (blank) is treated as "no ping"
+local function cleanRole(r)
+    if type(r) ~= "string" then return "" end
+    return (r:match("^%s*(.-)%s*$")) or ""
+end
+
 -- Role pings by egg weight (kg). First match from the top wins.
---   1,000,000 kg and up     -> 1M  - 100M
---   100,000 to 999,999 kg   -> 100K - 1M
---   1 to 99,999 kg          -> 1 - 100K
 local KG_PINGS = {
     { min = 10000000, role = "1557926807251193986" },
     { min = 100000,  role = " " },
@@ -51,7 +61,7 @@ local KG_PINGS = {
 local function kgRole(kg)
     if type(kg) ~= "number" then return "" end
     for _, t in ipairs(KG_PINGS) do
-        if kg >= t.min then return t.role end
+        if kg >= t.min then return cleanRole(t.role) end
     end
     return ""
 end
@@ -67,7 +77,7 @@ local VALUE_PINGS = {
 local function valueRole(value)
     if type(value) ~= "number" then return "" end
     for _, t in ipairs(VALUE_PINGS) do
-        if value >= t.min then return t.role end
+        if value >= t.min then return cleanRole(t.role) end
     end
     return ""
 end
@@ -86,6 +96,12 @@ local DEBUG_DUMP         = true   -- true: prints every field of an alerted egg 
 -- Leave "" to fall back to the old roblox.com link, which does NOT join the right server.
 local JOIN_PAGE          = "https://worstasaiya.github.io/rejoin/rejoin.html"
 
+-- ===================== SCRAMBLE SETTINGS =====================
+local SCRAMBLE_ENABLED    = true
+local SCRAMBLE_WEBHOOK    = "https://discord.com/api/webhooks/1558298659190345829/QgYU0KGCPMSnnjhj9ShruZLxdH-jw40I0bWlRS1ed6EKDOlvmf4hZ_tMciAsYJmF9YaC"  -- "" = use WEBHOOKS.Secret
+local SCRAMBLE_ROLE       = ""               -- optional role ping for the first Scramble message
+local SCRAMBLE_EDIT_EVERY = 10               -- seconds between edits while the boss is alive
+
 -- Minimum kg needed to send an alert, per tier (0 = always send).
 local MIN_KG = {
     Secret  = 0,
@@ -97,9 +113,9 @@ local MIN_KG = {
 -- ===================== SERVER HOPPING =====================
 -- HOP_FOR above determines which rarities trigger hopping.
 local HOP_ENABLED   = true
-local HOP_DELAY     = 6           -- FIX: was 3. Seconds between hops (raise to 8-10 if error 769 still shows up)
-local HOP_JITTER    = 2           -- FIX: extra random 0-2s per hop so your accounts don't all fire at the same moment
-local TELEPORT_WAIT = 30          -- FIX: was 15. How long to wait for a teleport before assuming it failed
+local HOP_DELAY     = 6           -- Seconds between hops (raise to 8-10 if error 769 still shows up)
+local HOP_JITTER    = 2           -- extra random 0-2s per hop so your accounts don't all fire at the same moment
+local TELEPORT_WAIT = 30          -- How long to wait for a teleport before assuming it failed
 local MIN_PLAYERS   = 1           -- skip servers with fewer players than this (2 avoids nearly-dead servers)
 local MAX_PLAYERS   = 3           -- skip servers with more players than this (counted BEFORE you join, so you arrive as +1)
 -- MULTI-ACCOUNT: list the exact Roblox usernames of EVERY account running this script
@@ -109,7 +125,7 @@ local ACCOUNTS = { "GGWORSTNOTIFIER", "REDFSAE4", "REDFSAE5", "REDFSAE6", "VOYSA
 local VISITED_FILE  = "egg_hop_visited.json"
 local VISITED_TTL   = 900         -- don't revisit a server for this many seconds
 local POOL_FILE     = "egg_hop_pool_asc.json"
-local POOL_TTL      = 25          -- FIX: was 60. Fresher list = fewer dead servers (don't go much lower with 12 accounts, or you get 429s)
+local POOL_TTL      = 25          -- Fresher list = fewer dead servers (don't go much lower with 12 accounts, or you get 429s)
 local SERVER_PAGES  = 1           -- pages (100 servers each) to read per refill
 
 -- ===================== CUSTOM EGGS =====================
@@ -803,8 +819,8 @@ end
 local function sendAlert(info, kg, location, mutation)
     task.spawn(pushFeed, info, kg, mutation)
     local style = STYLE[info.tier]
-    local roleId = ROLE_IDS[info.tier]
-    local mention = (roleId and roleId ~= "") and ("<@&" .. roleId .. "> ") or ""
+    local roleId = cleanRole(ROLE_IDS[info.tier])
+    local mention = (roleId ~= "") and ("<@&" .. roleId .. "> ") or ""
     local kgRoleId = kgRole(kg)
     if kgRoleId ~= "" then mention = mention .. "<@&" .. kgRoleId .. "> " end
 
@@ -1040,6 +1056,330 @@ end
 pcall(makeTestButton)
 
 -- ============================================================
+-- SCRAMBLE TRACKER
+-- One message per Scramble fight: posted once (join link + phase + boss HP),
+-- edited every SCRAMBLE_EDIT_EVERY seconds while the boss is alive, then
+-- "Boss Dead." when Phase becomes "Defeated".
+-- Right before a rare-egg hop, Scramble.beforeLeave() edits the message to
+-- "Not in server anymore". This module never starts hopping on its own.
+-- ============================================================
+local Scramble = {}
+
+do
+    local S = {
+        id = nil, url = nil, startedAt = nil, lastEdit = 0,
+        done = false, dead = false, left = false,
+        editing = false, sending = false, retryAt = 0, noArena = 0,
+    }
+
+    local JSON_HEADERS = { ["Content-Type"] = "application/json" }
+
+    local function on()
+        return workspace:GetAttribute("Event_ScrambleBoss") == true
+    end
+
+    local function commas(n)
+        n = tonumber(n)
+        if not n then return "?" end
+        local text = string.format("%.0f", math.max(n, 0))
+        local count
+        repeat
+            text, count = text:gsub("^(%d+)(%d%d%d)", "%1,%2")
+        until count == 0
+        return text
+    end
+
+    local function bar(p)
+        p = math.clamp(tonumber(p) or 0, 0, 1)
+        local n = math.floor(p * 12 + 0.5)
+        return string.rep("█", n) .. string.rep("░", 12 - n)
+    end
+
+    -- reads everything we show, straight from Workspace.ScrambleArena
+    local function read()
+        local f = {}
+        local a = workspace:FindFirstChild("ScrambleArena")
+        if a then
+            f.arena = true
+            f.phase = a:GetAttribute("Phase")
+            f.hp = a:GetAttribute("Health")
+            f.max = a:GetAttribute("MaxHealth")
+            f.spawnsAt = a:GetAttribute("SpawnsAt")
+            f.coreStage = a:GetAttribute("CoreStage")
+            f.hits = a:GetAttribute("HumanHits")
+            local ball = a:FindFirstChild("Ball")
+            f.ratio = ball and ball:GetAttribute("DamageRatio") or nil
+        end
+        return f
+    end
+
+    -- returns a field label and text for the current phase
+    local function progress(f)
+        local ph = tostring(f.phase or "Unknown")
+        if ph == "Waiting" then
+            local at = tonumber(f.spawnsAt)
+            if at and at > os.time() then
+                return "Boss", "Spawning <t:" .. math.floor(at) .. ":R>"
+            end
+            return "Boss", "Spawning soon"
+        elseif ph == "Mech" then
+            local hp, mx = tonumber(f.hp), tonumber(f.max)
+            if hp and mx and mx > 0 then
+                return "Boss HP", "```" .. bar(hp / mx) .. " " .. math.floor(hp / mx * 100 + 0.5)
+                    .. "%\n" .. commas(hp) .. " / " .. commas(mx) .. " HP```"
+            end
+            return "Boss HP", "Unknown"
+        elseif ph == "Ejecting" then
+            return "Boss HP", "```Mech destroyed, boss ejecting```"
+        elseif ph == "Ball" then
+            local r = tonumber(f.ratio) or 0
+            local stage = tonumber(f.coreStage)
+            local extra = stage and ("\nCore stage " .. math.min(stage + 1, 3) .. " / 3") or ""
+            return "Ball phase", "```" .. bar(r) .. " " .. math.floor(r * 100 + 0.5) .. "%" .. extra .. "```"
+        elseif ph == "Human" then
+            local h = tonumber(f.hits) or 0
+            return "Human phase", "```" .. bar(h / 3) .. " " .. h .. " / 3 hits```"
+        elseif ph == "Final" then
+            return "Final phase", "```Dr. Scramble is almost down```"
+        end
+        return "Phase", "```" .. ph .. "```"
+    end
+
+    local function embed(mode, f)
+        local now = os.time()
+        local link = serverLink()
+        local joinText = link and ("[**Click to Join Server**](" .. link .. ")") or "**Unavailable**"
+        local detected = "<t:" .. (S.startedAt or now) .. ":R>"
+
+        local e = {
+            timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ", now),
+            footer    = { text = FOOTER_TEXT .. " • Scramble Alert" },
+        }
+
+        if mode == "dead" or mode == "ended" then
+            local dead = (mode == "dead")
+            e.title = "🧪  DR. SCRAMBLE EVENT ENDED  🧪"
+            e.description = dead and "**Boss Dead.**" or "**The Scramble event has ended.**"
+            e.color = dead and 0xE74C3C or 0x95A5A6
+            e.fields = {
+                { name = "❌ Status",   value = dead and "**Defeated**" or "**Finished**", inline = true },
+                { name = "⏱️ Detected", value = detected, inline = true },
+                { name = "⌛ Ended",    value = "<t:" .. now .. ":R> (<t:" .. now .. ":t>)", inline = true },
+            }
+            return e
+        end
+
+        e.title = "🧪  DR. SCRAMBLE EVENT  🧪"
+        e.description = "*The Scramble boss event is running in this server.*"
+
+        if mode == "left" then
+            e.color = 0xE67E22
+            e.fields = {
+                { name = "📡 Status", value = "**Left the server**", inline = true },
+                { name = "🔗 Server", value = joinText, inline = true },
+                { name = "⏱️ Detected", value = detected, inline = true },
+                { name = "❤️ Boss HP", value = "**Not in server anymore**", inline = false },
+                { name = "🔄 Last updated", value = "<t:" .. now .. ":R>", inline = false },
+            }
+        else
+            local label, text = progress(f)
+            e.color = 0x2ECC71
+            e.fields = {
+                { name = "📡 Status", value = "**Boss alive**", inline = true },
+                { name = "🎯 Phase",  value = "**" .. tostring(f.phase or "Unknown") .. "**", inline = true },
+                { name = "🔗 Server", value = joinText, inline = true },
+                { name = "❤️ " .. label, value = text, inline = false },
+                { name = "⏱️ Detected", value = detected, inline = true },
+                { name = "🔄 Last updated", value = "<t:" .. now .. ":R>", inline = true },
+            }
+        end
+        return e
+    end
+
+    -- POST with ?wait=true so Discord returns the message id (needed to edit it later)
+    local function postWait(url, payload)
+        if not httpRequest then warn("[EGG KG] No http request function in this executor") return nil end
+        if not validUrl(url) then warn("[EGG KG] Scramble webhook not set or invalid") return nil end
+
+        for _ = 1, 4 do
+            local ok, res = pcall(httpRequest, {
+                Url = url .. "?wait=true", Method = "POST",
+                Headers = JSON_HEADERS, Body = HttpService:JSONEncode(payload),
+            })
+            if ok and type(res) == "table" then
+                local code = tonumber(res.StatusCode)
+                if code == 429 then
+                    local wait = 1
+                    pcall(function() wait = tonumber(HttpService:JSONDecode(res.Body).retry_after) or 1 end)
+                    task.wait(wait + 0.1)
+                elseif code and code >= 200 and code < 300 then
+                    local okj, data = pcall(function() return HttpService:JSONDecode(res.Body) end)
+                    if okj and type(data) == "table" and data.id then return tostring(data.id) end
+                    return nil
+                else
+                    warn("[EGG KG] Scramble post failed, status " .. tostring(code))
+                    return nil
+                end
+            else
+                task.wait(1)
+            end
+        end
+        return nil
+    end
+
+    -- edit an existing webhook message. returns ok, statusCode
+    local function patchMessage(url, id, payload)
+        if not httpRequest then return false end
+        for _ = 1, 3 do
+            local ok, res = pcall(httpRequest, {
+                Url = url .. "/messages/" .. id, Method = "PATCH",
+                Headers = JSON_HEADERS, Body = HttpService:JSONEncode(payload),
+            })
+            if ok and type(res) == "table" then
+                local code = tonumber(res.StatusCode)
+                if code == 429 then
+                    local wait = 1
+                    pcall(function() wait = tonumber(HttpService:JSONDecode(res.Body).retry_after) or 1 end)
+                    task.wait(wait + 0.1)
+                elseif code and code >= 200 and code < 300 then
+                    return true, code
+                else
+                    return false, code
+                end
+            else
+                task.wait(1)
+            end
+        end
+        return false
+    end
+
+    local function reset()
+        S.id, S.url, S.startedAt = nil, nil, nil
+        S.lastEdit, S.retryAt, S.noArena = 0, 0, 0
+        S.done, S.dead, S.left = false, false, false
+    end
+
+    local function sendFirst(f)
+        S.sending = true
+        S.startedAt = os.time()
+        local url = (SCRAMBLE_WEBHOOK ~= "" and SCRAMBLE_WEBHOOK) or WEBHOOKS.Secret
+        local role = cleanRole(SCRAMBLE_ROLE)
+        local mention = (role ~= "") and ("<@&" .. role .. "> ") or ""
+
+        local id = postWait(url, {
+            username   = BOT_NAME,
+            avatar_url = (BOT_AVATAR ~= "") and BOT_AVATAR or nil,
+            content    = mention .. "🧪 **Dr. Scramble event is active in this server**",
+            allowed_mentions = { parse = { "roles" } },
+            embeds     = { embed("alive", f) },
+        })
+        S.sending = false
+
+        if id then
+            S.id, S.url, S.lastEdit = id, url, os.clock()
+            print("[EGG KG] Scramble event detected, message sent")
+        else
+            S.retryAt = os.clock() + 15
+            warn("[EGG KG] Scramble message failed to send, retrying in 15s")
+        end
+    end
+
+    local function editAlive(f)
+        S.editing = true
+        local ok, code = patchMessage(S.url, S.id, { embeds = { embed("alive", f) } })
+        S.editing = false
+        S.lastEdit = os.clock()
+        if not ok and code == 404 then
+            S.dead = true   -- message was deleted, stop editing it
+            warn("[EGG KG] Scramble message was deleted, no more edits")
+        end
+    end
+
+    local function finish(mode, f)
+        S.editing = true
+        patchMessage(S.url, S.id, { embeds = { embed(mode, f) } })
+        S.editing = false
+        S.done = true
+        print("[EGG KG] Scramble message set to " .. (mode == "dead" and "Boss Dead." or "event ended"))
+    end
+
+    local function step()
+        local isOn = on()
+        local f = read()
+
+        -- event over
+        if not isOn then
+            if S.id and not S.done and not S.dead and not S.left then finish("ended", f) end
+            if S.id or S.done or S.dead then reset() end
+            return
+        end
+
+        -- boss dead (also covers joining a server after the boss already died: no alert)
+        if f.phase == "Defeated" then
+            if S.id and not S.done and not S.dead and not S.left then finish("dead", f) end
+            S.done = true
+            return
+        end
+
+        -- a new fight started after a finished one
+        if S.done then reset() end
+
+        -- give the arena a few seconds to load before the first message
+        if not f.arena then
+            S.noArena = S.noArena + 1
+            if S.noArena < 8 then return end
+        else
+            S.noArena = 0
+        end
+
+        if S.left then return end
+
+        if not S.id then
+            if S.dead or os.clock() < S.retryAt then return end
+            sendFirst(f)
+        elseif not S.dead and os.clock() - S.lastEdit >= SCRAMBLE_EDIT_EVERY then
+            editAlive(f)
+        end
+    end
+
+    -- called by the hopper right BEFORE teleporting away
+    function Scramble.beforeLeave()
+        if not SCRAMBLE_ENABLED or not on() then return end
+        local f = read()
+        if f.phase == "Defeated" then return end
+
+        -- let the first message go out, then let any edit in flight finish
+        local t0 = os.clock()
+        while not S.id and not S.dead and not S.done and os.clock() - t0 < 8 do task.wait(0.2) end
+        t0 = os.clock()
+        while (S.editing or S.sending) and os.clock() - t0 < 6 do task.wait(0.1) end
+
+        if not S.id or S.done or S.dead then return end
+        S.left = true   -- stops the 10s edits
+        local ok = patchMessage(S.url, S.id, { embeds = { embed("left", f) } })
+        print("[EGG KG] Scramble message set to 'Not in server anymore'" .. (ok and "" or " (edit failed)"))
+    end
+
+    -- called when a teleport fails: we are still here, so resume the 10s edits
+    function Scramble.teleportFailed()
+        if S.left then
+            S.left = false
+            S.lastEdit = 0
+        end
+    end
+
+    if SCRAMBLE_ENABLED then
+        task.spawn(function()
+            while true do
+                local ok, err = pcall(step)
+                if not ok then warn("[EGG KG] scramble error: " .. tostring(err)) end
+                task.wait(1)
+            end
+        end)
+    end
+end
+
+-- ============================================================
 -- SERVER HOPPER
 -- ============================================================
 
@@ -1188,7 +1528,7 @@ loadPool()
 -- ---- teleport + hop loop ----
 local teleporting, floodUntil = false, 0
 
--- FIX: back off after EVERY failed teleport (error 769 included), and back off longer
+-- back off after EVERY failed teleport (error 769 included), and back off longer
 -- the more failures happen in a row. A successful teleport ends this script and the next
 -- server starts at 0, so there is no need to reset it.
 local failStreak = 0
@@ -1201,6 +1541,7 @@ TeleportService.TeleportInitFailed:Connect(function(_, result, msg)
         backoff = math.max(backoff, 15)
     end
     floodUntil = os.clock() + backoff
+    pcall(Scramble.teleportFailed)   -- still in this server: resume the Scramble message edits
     warn("[EGG KG] teleport failed (" .. tostring(result) .. ", streak " .. failStreak
         .. "), waiting " .. backoff .. "s. " .. tostring(msg))
 end)
@@ -1220,7 +1561,7 @@ local function hopLoop()
     while (#queue > 0 or sendBusy) and os.clock() - t0 < 20 do task.wait(0.2) end
 
     while HOP_ENABLED and not stopped() and huntActive() do
-        -- FIX: random jitter so the accounts don't all hit Roblox at the same moment
+        -- random jitter so the accounts don't all hit Roblox at the same moment
         task.wait(HOP_DELAY + math.random() * HOP_JITTER)
         if not huntActive() then break end
 
@@ -1234,6 +1575,9 @@ local function hopLoop()
             saveVisited()
             savePool()
 
+            -- Scramble message: set it to "Not in server anymore" BEFORE we leave
+            pcall(Scramble.beforeLeave)
+
             teleporting = true
             local tp0 = os.clock()
             local ok, err = pcall(function()
@@ -1241,17 +1585,18 @@ local function hopLoop()
             end)
             if not ok then
                 teleporting = false
-                failStreak = failStreak + 1          -- FIX: count errors thrown directly by the call too
+                failStreak = failStreak + 1          -- count errors thrown directly by the call too
                 floodUntil = os.clock() + math.min(5 * failStreak, 30)
+                pcall(Scramble.teleportFailed)
                 warn("[EGG KG] teleport error: " .. tostring(err))
             end
             -- a successful teleport ends this script; wait for a failure or a timeout
-            -- FIX: wait longer (TELEPORT_WAIT) so a slow teleport is not overlapped by a new one
             while teleporting and os.clock() - tp0 < TELEPORT_WAIT do task.wait(0.2) end
             if teleporting then
                 -- timed out without success or failure: treat it as a failure too
                 failStreak = failStreak + 1
                 floodUntil = os.clock() + math.min(5 * failStreak, 30)
+                pcall(Scramble.teleportFailed)
             end
             teleporting = false
         else
@@ -1338,7 +1683,8 @@ end
 
 print("[EGG KG] running. Hopping " .. (HOP_ENABLED and "ON" or "OFF")
     .. " for: " .. table.concat(HOP_FOR, ", ")
-    .. ". Custom entries: " .. #CUSTOM_EGGS)
+    .. ". Custom entries: " .. #CUSTOM_EGGS
+    .. ". Scramble tracker " .. (SCRAMBLE_ENABLED and "ON" or "OFF"))
 
 -- runs forever: scan, and close the window when its time is up
 while true do
