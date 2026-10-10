@@ -94,7 +94,7 @@ local KG_DECIMALS        = 0      -- 0 = "65K", 1 = "65.6K"  (use 2 to see e.g. 
 local DEBUG_DUMP         = true   -- true: prints every field of an alerted egg to the console (to find mutation data)
 -- Redirect page that opens the roblox:// join link (upload join.html there).
 -- Leave "" to fall back to the old roblox.com link, which does NOT join the right server.
-local JOIN_PAGE          = "https://worstasaiya.github.io/rejoin/rejoin.html"
+local JOIN_PAGE          = "https://worstasaiya.github.io/ASAIYASITE/join.html"
 
 -- ===================== SCRAMBLE SETTINGS =====================
 local SCRAMBLE_ENABLED    = true
