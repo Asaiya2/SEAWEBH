@@ -1,5 +1,5 @@
-wait(12)
-print("MIXED CHANNELS")
+wait(10)
+print("ADDED IMAGES FOR NEW BIOME")
 -- ============================================================
 --  RARE EGG NOTIFIER + BOT FEED + BUTTERFLY BLOOM ALERT
 --  Rare egg alerts now come from scanning the game's eggs
@@ -21,7 +21,7 @@ local BUTTERFLY_ROLE_ID  = "1556173039224225812"
 local BUTTERFLY_EVENT    = "ButterflyBloom"
 local BUTTERFLY_COOLDOWN = 600   -- seconds between alerts
 local BUTTERFLY_DEFAULT_DURATION = 300
-local BUTTERFLY_IMAGE    = "https://thumbs.dreamstime.com/b/enchanted-forest-butterfly-surreal-iridescent-dream-vibrant-green-step-fantastical-realm-captivating-image-353977878.jpg"
+local BUTTERFLY_IMAGE    = "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcShJHyWT_Tli6qDaHj2LdtNGXKvujRKQIWaIFLZtBVv1Q&s=10"
 
 -- Webhook of your PRIVATE feed channel (the one you ran !egginput in)
 local FEED_WEBHOOK = "https://discord.com/api/webhooks/1554004883353632790/pveRQ_8LBUr5Tlxj34EBtO7Ruua8mvfIACa5QfvhgoUhc6rUw2hgI2VYDltxzmzmznx_"
@@ -254,6 +254,7 @@ local SECRETS = {
     "cosmic skeleton", "cosmic dragon", "cerberus", "kraken", "yeti",
     "tralaledon", "trex", "stag",
     "starry fox",
+    "king snake",
 }
 
 local ETERNALS = {
@@ -346,11 +347,11 @@ local EGG_VALUES = {
     ["yeti"]            = "5M/s",
     ["tralaledon"]      = "32M/s",
     ["trex"]            = "25M/s",
-    ["Stag"]            = "145M/s",
-    
+    ["stag"]            = "145M/s",
+
 
     -- Enchanted Forest: replace "VALUE NOT SET" with the real value (e.g. "1.5B/s").
-    ["starry fox"]        = "500M/s",
+    ["starry fox"]        = "750M/s",
     ["celestial sunlion"] = "2B/s",
 }
 
@@ -363,6 +364,44 @@ local ROLE_IDS = {
     Secret  = "1552345277459988480",
     Eternal = "1552345217640698036",
     Divine  = "1552345257599836160",
+}
+
+-- Per-creature roles: pinged IN ADDITION to the tier role above.
+-- Keys match the names in SECRETS / ETERNALS / DIVINES.
+local PET_ROLE_IDS = {
+    -- Divine
+    ["world burner"]         = "1558518928144208012",
+    ["archangel"]            = "1558519073208537108",
+    ["royal skywhale"]       = "1558519461114286151",
+    ["nightflame"]           = "1558519547139461120",
+    ["kitsune"]              = "1558519659647606865",
+    ["unicorn"]              = "1558519726102159440",
+    -- Eternal
+    ["celestial sunlion"]    = "1558519789016842320",
+    ["skeleton horse"]       = "1558520158455333045",
+    ["pegasus"]              = "1558520297563623484",
+    ["oni tiger"]            = "1558520427641307156",
+    ["eternal lunar dragon"] = "1558520747192885318",
+    ["mosasaurus"]           = "1558521006988197948",
+    ["el maja"]              = "1558521100256936006",
+    ["lava dragon"]          = "1558521192913174639",
+    ["ice dragon"]           = "1558521258902036541",
+    -- Secret
+    ["king snake"]           = "1558521606333014017",
+    ["yeti"]                 = "1558521675308335205",
+    ["phoenix"]              = "1558521741762896013",
+    ["cerberus"]             = "1558521813615775744",
+    ["kraken"]               = "1558521877805273099",
+    ["trex"]                 = "1558521942410006608",
+    ["tralaledon"]           = "1558521991156465714",
+    ["cosmic skeleton"]      = "1558522089911230556",
+    ["stag"]                 = "1558522247734366228",
+    ["mutant shark"]         = "1558522369947992185",
+    ["pure jellyfish"]       = "1558522559375478945",
+    ["gargoyle"]             = "1558522620205604945",
+    ["razorfang"]            = "1558522667752099850",
+    ["centaur"]              = "1558522716967936007",
+    ["starry fox"]           = "1558522767278870538",
 }
 
 
@@ -594,7 +633,13 @@ local function sendEggEmbed(eggName, tier, location)
     local style  = STYLE[tier]
     local roleId = ROLE_IDS[tier]
 
+    -- tier role + the creature's own role (if it has one)
     local mention = roleId and ("<@&" .. roleId .. ">") or ""
+    local petRoleId = PET_ROLE_IDS[eggName]
+    if petRoleId then
+        mention = mention .. " <@&" .. petRoleId .. ">"
+    end
+
     local name    = (DISPLAY_OF[norm(eggName)] or prettyName(eggName)) .. " Egg"
     local now     = os.time()
 
@@ -1275,29 +1320,115 @@ end)
 
 local lastButterflyAt = 0
 
+local function buildButterflyEmbed(startedAt, endsAt, finished)
+    local fields, title, desc, color
+
+    if finished then
+        title  = "🦋  BUTTERFLY BLOOM ENDED  🦋"
+        desc   = "*The butterflies have flown away*"
+        color  = 0x808080
+        fields = {
+            { name = "🦋 Event",   value = "**Butterfly Bloom**", inline = true },
+            { name = "❌ Status",  value = "**Finished**",        inline = true },
+            { name = "⏱️ Started", value = "**<t:" .. startedAt .. ":R>**", inline = true },
+            { name = "⌛ ENDED",   value = "**Ended <t:" .. endsAt .. ":R>** (<t:" .. endsAt .. ":t>)", inline = false },
+        }
+    else
+        title  = "🦋  BUTTERFLY BLOOM ACTIVE  🦋"
+        desc   = "*A swarm of butterflies roam the servers*"
+        color  = 0xFF69B4
+        fields = {
+            { name = "🦋 Event",     value = "**Butterfly Bloom**", inline = true },
+            { name = "✅ Status",    value = "**Active**",          inline = true },
+            { name = "⏱️ Started",   value = "**<t:" .. startedAt .. ":R>**", inline = true },
+            { name = "⏳ TIME LEFT", value = "**Disappears <t:" .. endsAt .. ":R>** (<t:" .. endsAt .. ":t>)", inline = false },
+        }
+    end
+
+    return {
+        title       = title,
+        description = desc,
+        color       = color,
+        thumbnail   = { url = BUTTERFLY_IMAGE },
+        fields      = fields,
+        footer      = { text = "https://discord.gg/W0RST • Secret Alert" },
+        timestamp   = os.date("!%Y-%m-%dT%H:%M:%SZ", os.time()),
+    }
+end
+
 local function sendButterflyEmbed(startedAt, duration)
+    if not httpRequest or not validUrl(BUTTERFLY_WEBHOOK) then
+        warn("[Butterfly] webhook/request function missing")
+        return
+    end
+
     local endsAt = startedAt + duration
 
-    postWebhook(BUTTERFLY_WEBHOOK, {
-        username   = BOT_NAME,
-        avatar_url = (BOT_AVATAR ~= "") and BOT_AVATAR or nil,
-        content    = "<@&" .. BUTTERFLY_ROLE_ID .. "> **Butterfly Bloom** just started!",
-        allowed_mentions = { roles = { BUTTERFLY_ROLE_ID } },
-        embeds = {{
-            title       = "🦋  BUTTERFLY BLOOM ACTIVE  🦋",
-            description = "*A swarm of butterflies roam the servers*",
-            color       = 0xFF69B4,
-            thumbnail   = { url = BUTTERFLY_IMAGE },
-            fields = {
-                { name = "🦋 Event",     value = "**Butterfly Bloom**", inline = true },
-                { name = "✅ Status",    value = "**Active**",          inline = true },
-                { name = "⏱️ Started",   value = "**<t:" .. startedAt .. ":R>**", inline = true },
-                { name = "⏳ TIME LEFT", value = "**Disappears <t:" .. endsAt .. ":R>** (<t:" .. endsAt .. ":t>)", inline = false },
-            },
-            footer    = { text = "https://discord.gg/W0RST • Secret Alert" },
-            timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ", os.time()),
-        }},
-    }, true)
+    task.spawn(function()
+        local messageId = nil
+
+        -- 1. Send with ?wait=true so Discord returns the message (and its ID)
+        for attempt = 1, 4 do
+            local ok, res = pcall(function()
+                return httpRequest({
+                    Url     = BUTTERFLY_WEBHOOK .. "?wait=true",
+                    Method  = "POST",
+                    Headers = { ["Content-Type"] = "application/json" },
+                    Body    = HttpService:JSONEncode({
+                        username   = BOT_NAME,
+                        avatar_url = (BOT_AVATAR ~= "") and BOT_AVATAR or nil,
+                        content    = "<@&" .. BUTTERFLY_ROLE_ID .. "> **Butterfly Bloom** just started!",
+                        allowed_mentions = { roles = { BUTTERFLY_ROLE_ID } },
+                        embeds     = { buildButterflyEmbed(startedAt, endsAt, false) },
+                    }),
+                })
+            end)
+
+            if ok and type(res) == "table" then
+                if tonumber(res.StatusCode) == 429 then
+                    local waitFor = 1
+                    pcall(function()
+                        waitFor = tonumber(HttpService:JSONDecode(res.Body).retry_after) or 1
+                    end)
+                    task.wait(waitFor + 0.1)
+                else
+                    pcall(function()
+                        messageId = HttpService:JSONDecode(res.Body).id
+                    end)
+                    break
+                end
+            else
+                break
+            end
+        end
+
+        if not messageId then
+            warn("[Butterfly] could not get message id, end edit skipped")
+            return
+        end
+
+        -- 2. Wait until the event ends, then edit the same message
+        task.wait(math.max(endsAt - os.time(), 0) + 1)
+
+        local ok, res = pcall(function()
+            return httpRequest({
+                Url     = BUTTERFLY_WEBHOOK .. "/messages/" .. messageId,
+                Method  = "PATCH",
+                Headers = { ["Content-Type"] = "application/json" },
+                Body    = HttpService:JSONEncode({
+                    content = "**Butterfly Bloom** has ended.",
+                    allowed_mentions = { parse = {} },
+                    embeds  = { buildButterflyEmbed(startedAt, endsAt, true) },
+                }),
+            })
+        end)
+
+        if ok then
+            print("[Butterfly] message edited to finished")
+        else
+            warn("[Butterfly] edit failed: " .. tostring(res))
+        end
+    end)
 end
 
 local function onButterflyBegan(name, duration)
