@@ -254,6 +254,7 @@ local SECRETS = {
     "cosmic skeleton", "cosmic dragon", "cerberus", "kraken", "yeti",
     "tralaledon", "trex", "stag",
     "starry fox",
+    "king snake",
 }
 
 local ETERNALS = {
@@ -347,7 +348,7 @@ local EGG_VALUES = {
     ["tralaledon"]      = "32M/s",
     ["trex"]            = "25M/s",
     ["stag"]            = "145M/s",
-    
+
 
     -- Enchanted Forest: replace "VALUE NOT SET" with the real value (e.g. "1.5B/s").
     ["starry fox"]        = "750M/s",
@@ -363,6 +364,44 @@ local ROLE_IDS = {
     Secret  = "1552345277459988480",
     Eternal = "1552345217640698036",
     Divine  = "1552345257599836160",
+}
+
+-- Per-creature roles: pinged IN ADDITION to the tier role above.
+-- Keys match the names in SECRETS / ETERNALS / DIVINES.
+local PET_ROLE_IDS = {
+    -- Divine
+    ["world burner"]         = "1558518928144208012",
+    ["archangel"]            = "1558519073208537108",
+    ["royal skywhale"]       = "1558519461114286151",
+    ["nightflame"]           = "1558519547139461120",
+    ["kitsune"]              = "1558519659647606865",
+    ["unicorn"]              = "1558519726102159440",
+    -- Eternal
+    ["celestial sunlion"]    = "1558519789016842320",
+    ["skeleton horse"]       = "1558520158455333045",
+    ["pegasus"]              = "1558520297563623484",
+    ["oni tiger"]            = "1558520427641307156",
+    ["eternal lunar dragon"] = "1558520747192885318",
+    ["mosasaurus"]           = "1558521006988197948",
+    ["el maja"]              = "1558521100256936006",
+    ["lava dragon"]          = "1558521192913174639",
+    ["ice dragon"]           = "1558521258902036541",
+    -- Secret
+    ["king snake"]           = "1558521606333014017",
+    ["yeti"]                 = "1558521675308335205",
+    ["phoenix"]              = "1558521741762896013",
+    ["cerberus"]             = "1558521813615775744",
+    ["kraken"]               = "1558521877805273099",
+    ["trex"]                 = "1558521942410006608",
+    ["tralaledon"]           = "1558521991156465714",
+    ["cosmic skeleton"]      = "1558522089911230556",
+    ["stag"]                 = "1558522247734366228",
+    ["mutant shark"]         = "1558522369947992185",
+    ["pure jellyfish"]       = "1558522559375478945",
+    ["gargoyle"]             = "1558522620205604945",
+    ["razorfang"]            = "1558522667752099850",
+    ["centaur"]              = "1558522716967936007",
+    ["starry fox"]           = "1558522767278870538",
 }
 
 
@@ -594,7 +633,13 @@ local function sendEggEmbed(eggName, tier, location)
     local style  = STYLE[tier]
     local roleId = ROLE_IDS[tier]
 
+    -- tier role + the creature's own role (if it has one)
     local mention = roleId and ("<@&" .. roleId .. ">") or ""
+    local petRoleId = PET_ROLE_IDS[eggName]
+    if petRoleId then
+        mention = mention .. " <@&" .. petRoleId .. ">"
+    end
+
     local name    = (DISPLAY_OF[norm(eggName)] or prettyName(eggName)) .. " Egg"
     local now     = os.time()
 
