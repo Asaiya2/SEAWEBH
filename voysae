@@ -220,6 +220,7 @@ local EGG_BASE = {
     worldburner   = { income = 5e9,   weight = 120000 },
     archangel     = { income = 5e9,   weight = 120000 },
     stag                 = { income = 145e6, weight = 180 },
+    royalskywhale        = { income = 8e9,   weight = 190000 },
     skeletonhorse        = { income = 1.3e9, weight = 65000 },
     pegasus              = { income = 1.3e9, weight = 65000 },
     eternallunardragon   = { income = 250e6, weight = 60000 },
