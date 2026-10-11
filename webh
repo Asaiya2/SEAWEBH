@@ -1480,7 +1480,7 @@ end
 
 do
     local RACE_WEBHOOK = "https://discord.com/api/webhooks/1558747004627320882/Ul5HnfO9g7v0hxxCdZFfu6X_jrplGAe6kx64HvvK4K_W1xMccyMiGwmbt_jEGnBjeVbQ"
-    local RACE_ROLE_ID = "1556196531546361947"
+    local RACE_ROLE_ID = "1558761299566002266"
     local RACE_IMAGE   = "https://cdn.creazilla.com/cliparts/3226961/checkered-flag-clipart-md.png"
 
     local RACE_EVENT    = "RaceRally"
