@@ -1043,7 +1043,7 @@ end
 
 
 -- ============================================================
--- BUTTERFLY BLOOM STATE  (NEW)
+-- BUTTERFLY BLOOM STATE
 -- Shared between the event hook (Part 3) and the feed (Part 2).
 -- Part 3 sets butterflyEndsAt when the event begins; the feed
 -- reads it so the bot knows the event is running.
@@ -1058,6 +1058,29 @@ local function butterflyLeft()
             return left
         end
         butterflyEndsAt = nil
+    end
+    return nil
+end
+
+
+-- ============================================================
+-- RACING STATE  (NEW)
+-- Shared between the race hook (Part 4) and the feed (Part 2).
+-- Part 4 sets raceEndsAt when the race opens (= end of the join
+-- window); the feed sends "_race" to the bot while it's open.
+-- When it closes, "_race" disappears and the bot records
+-- "last seen" for Racing.
+-- ============================================================
+
+local raceEndsAt = nil   -- os.time() when the join window closes, nil = not open
+
+local function raceLeft()
+    if raceEndsAt then
+        local left = raceEndsAt - os.time()
+        if left > 0 then
+            return left
+        end
+        raceEndsAt = nil
     end
     return nil
 end
@@ -1085,11 +1108,18 @@ local function sendFeed(counts, cycleAge)
         end
     end
 
-    -- Butterfly Bloom (NEW): tell the bot the event is running and how long is left
+    -- Butterfly Bloom: tell the bot the event is running and how long is left
     local bLeft = butterflyLeft()
     if bLeft then
         data._butterfly = 1
         data._butterfly_left = bLeft
+    end
+
+    -- Racing (NEW): tell the bot the race is open and how long is left to join
+    local rLeft = raceLeft()
+    if rLeft then
+        data._race = 1
+        data._race_left = rLeft
     end
 
     local body = "EGGDATA" .. HttpService:JSONEncode(data)
@@ -1289,9 +1319,14 @@ task.spawn(function()
                 sig = sig .. "|scramble:" .. bannerName
             end
 
-            -- Butterfly Bloom (NEW): start/stop of the event is sent right away too.
+            -- Butterfly Bloom: start/stop of the event is sent right away too.
             if butterflyLeft() then
                 sig = sig .. "|butterfly:1"
+            end
+
+            -- Racing (NEW): race opening / closing is sent right away too.
+            if raceLeft() then
+                sig = sig .. "|race:1"
             end
 
             local changed = sig ~= lastSig
@@ -1437,7 +1472,7 @@ local function onButterflyBegan(name, duration)
         return
     end
 
-    -- NEW: remember when the event ends so the feed reports it as running.
+    -- remember when the event ends so the feed reports it as running.
     -- This happens BEFORE the cooldown check so the board is always correct.
     local dur = tonumber(duration) or BUTTERFLY_DEFAULT_DURATION
     butterflyEndsAt = os.time() + dur
@@ -1620,6 +1655,16 @@ do
         lastRaceStart = now
 
         joinEndsAt = tonumber(joinEndsAt) or (now + RACE_JOIN)
+
+        -- sanity check: if the game's value looks wrong, use the default window
+        if joinEndsAt < now or joinEndsAt > now + 600 then
+            joinEndsAt = now + RACE_JOIN
+        end
+
+        -- NEW: tell the board feed the race is open (cleared automatically
+        -- when the join window ends -> the bot then records "last seen")
+        raceEndsAt = joinEndsAt
+
         local startTs   = now
         local guessNext = startTs + RACE_INTERVAL
         print("[RacingWebhook] race started! sending alert")
