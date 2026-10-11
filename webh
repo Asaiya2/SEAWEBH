@@ -2,6 +2,7 @@ wait(10)
 print("ADDED IMAGES FOR NEW BIOME")
 -- ============================================================
 --  RARE EGG NOTIFIER + BOT FEED + BUTTERFLY BLOOM ALERT
+--  + RACING EVENT ALERT
 --  Rare egg alerts now come from scanning the game's eggs
 --  (same source as the board feed). No chat detection.
 -- ============================================================
@@ -1466,6 +1467,235 @@ if TEST_MODE then
     task.delay(4, function()
         sendButterflyEmbed(os.time(), BUTTERFLY_DEFAULT_DURATION)
     end)
+end
+
+
+-- ============================================================
+-- PART 4: RACING EVENT (RaceRally)
+-- Fires the instant the game announces RaceRally on
+-- RE/LiveEvents/Began. Green = you can still join,
+-- red = join window closed. Wrapped in do...end so its
+-- variables can't clash with the rest of the script.
+-- ============================================================
+
+do
+    local RACE_WEBHOOK = "https://discord.com/api/webhooks/1558747004627320882/Ul5HnfO9g7v0hxxCdZFfu6X_jrplGAe6kx64HvvK4K_W1xMccyMiGwmbt_jEGnBjeVbQ"
+    local RACE_ROLE_ID = "1556196531546361947"
+    local RACE_IMAGE   = "https://cdn.creazilla.com/cliparts/3226961/checkered-flag-clipart-md.png"
+
+    local RACE_EVENT    = "RaceRally"
+    local RACE_LOCATION = "Abyss Ocean"
+    local RACE_INTERVAL = 30 * 60 -- fallback gap between races
+    local RACE_JOIN     = 60      -- join window if the game doesn't tell us
+    local RACE_COOLDOWN = 120     -- ignore duplicate triggers for this long
+
+    local COLOR_JOINABLE = 0x23A55A -- green: you can still join
+    local COLOR_CLOSED   = 0xED4245 -- red: you can no longer join
+
+    -- ---------- timer reader ----------
+    local function readTimerText()
+        local pg  = Players.LocalPlayer and Players.LocalPlayer:FindFirstChild("PlayerGui")
+        local hud = pg and pg:FindFirstChild("HUD")
+        if not hud then return nil end
+
+        for _, name in ipairs({ "GameHUD", "TradmilHud" }) do
+            local h  = hud:FindFirstChild(name)
+            local br = h and h:FindFirstChild("BottomRight")
+            local rt = br and br:FindFirstChild("RaceTimer")
+            local v  = rt and rt:FindFirstChild("Value")
+            if v and v:IsA("TextLabel") then
+                return (v.Text:gsub("<[^>]->", ""))
+            end
+        end
+        return nil
+    end
+
+    -- "Race in 28:27" -> 1707 (seconds), or nil
+    local function secondsUntilNextRace()
+        local text = readTimerText()
+        if not text or not text:lower():find("race in") then return nil end
+        local a, b, c = text:match("(%d+):(%d+):?(%d*)")
+        if not (a and b) then return nil end
+        if c ~= "" then
+            return tonumber(a) * 3600 + tonumber(b) * 60 + tonumber(c)
+        end
+        return tonumber(a) * 60 + tonumber(b)
+    end
+
+    -- ---------- embed ----------
+    local function buildRaceEmbed(startTs, joinEndsAt, nextTs, closed)
+        local title, desc, color, fields
+
+        if closed then
+            title = "🏁  RACING EVENT STARTED  🏁"
+            desc  = "*The race has already begun*"
+            color = COLOR_CLOSED
+            fields = {
+                { name = "🏁 Event",    value = "**Racing**",          inline = true },
+                { name = "❌ Status",   value = "**Already Started**", inline = true },
+                { name = "⏱️ Started",  value = "**<t:" .. startTs .. ":R>**", inline = true },
+                { name = "📍 Location", value = "**" .. RACE_LOCATION .. "**", inline = false },
+                {
+                    name = "🔁 NEXT RACING",
+                    value = "**Starts <t:" .. nextTs .. ":R>** (<t:" .. nextTs .. ":t>)",
+                    inline = false,
+                },
+            }
+        else
+            title = "🏁  RACING EVENT TIME  🏁"
+            desc  = "*The race is open, jump in!*"
+            color = COLOR_JOINABLE
+            fields = {
+                { name = "🏁 Event",       value = "**Racing**",    inline = true },
+                { name = "✅ Status",      value = "**Race Open**", inline = true },
+                { name = "⏳ Join closes", value = "**<t:" .. joinEndsAt .. ":R>**", inline = true },
+                { name = "📍 Location",    value = "**" .. RACE_LOCATION .. "**", inline = false },
+                {
+                    name = "🔁 NEXT RACING",
+                    value = "**Starts <t:" .. nextTs .. ":R>** (<t:" .. nextTs .. ":t>)",
+                    inline = false,
+                },
+            }
+        end
+
+        return {
+            title       = title,
+            description = desc,
+            color       = color,
+            thumbnail   = { url = RACE_IMAGE },
+            fields      = fields,
+            footer      = { text = "https://discord.gg/W0RST • Racing Alert" },
+            timestamp   = os.date("!%Y-%m-%dT%H:%M:%SZ", os.time()),
+        }
+    end
+
+    -- ---------- http (with rate-limit retry) ----------
+    local function raceRequest(method, url, body)
+        if not httpRequest then
+            warn("[RacingWebhook] no HTTP request function")
+            return nil
+        end
+
+        for attempt = 1, 4 do
+            local ok, res = pcall(function()
+                return httpRequest({
+                    Url     = url,
+                    Method  = method,
+                    Headers = { ["Content-Type"] = "application/json" },
+                    Body    = HttpService:JSONEncode(body),
+                })
+            end)
+
+            if not ok then
+                warn("[RacingWebhook] request failed:", res)
+                return nil
+            end
+
+            local code = tonumber(res.StatusCode) or 0
+
+            if code == 429 then
+                local waitFor = 1
+                pcall(function()
+                    waitFor = tonumber(HttpService:JSONDecode(res.Body).retry_after) or 1
+                end)
+                task.wait(waitFor + 0.1)
+            elseif code < 200 or code >= 300 then
+                warn("[RacingWebhook] HTTP", code, res.Body)
+                return nil
+            else
+                return res
+            end
+        end
+        return nil
+    end
+
+    -- ---------- alert ----------
+    local lastRaceStart = 0
+
+    local function onRaceStart(joinEndsAt)
+        local now = os.time()
+        if now - lastRaceStart < RACE_COOLDOWN then
+            return -- already handled (remote / attribute / timer can all fire)
+        end
+        lastRaceStart = now
+
+        joinEndsAt = tonumber(joinEndsAt) or (now + RACE_JOIN)
+        local startTs   = now
+        local guessNext = startTs + RACE_INTERVAL
+        print("[RacingWebhook] race started! sending alert")
+
+        local res = raceRequest("POST", RACE_WEBHOOK .. "?wait=true", {
+            username   = BOT_NAME,
+            avatar_url = BOT_AVATAR,
+            content    = ("<@&%s> **Racing Event** just started! Join now!"):format(RACE_ROLE_ID),
+            allowed_mentions = { roles = { RACE_ROLE_ID } },
+            embeds     = { buildRaceEmbed(startTs, joinEndsAt, guessNext, false) },
+        })
+        if not res then return end
+
+        local messageId
+        pcall(function()
+            messageId = HttpService:JSONDecode(res.Body).id
+        end)
+        if not messageId then
+            warn("[RacingWebhook] could not get message id, edit skipped")
+            return
+        end
+
+        -- when the join window closes, turn it red
+        task.wait(math.max(0, joinEndsAt - os.time()) + 2)
+
+        -- use the game's real "Race in M:SS" countdown for the next race if available
+        local nextTs = guessNext
+        local secs = secondsUntilNextRace()
+        if secs and secs > 0 then
+            nextTs = os.time() + secs
+        end
+
+        raceRequest("PATCH", RACE_WEBHOOK .. "/messages/" .. messageId, {
+            content = "**Racing Event** has already started.",
+            allowed_mentions = { parse = {} },
+            embeds  = { buildRaceEmbed(startTs, joinEndsAt, nextTs, true) },
+        })
+    end
+
+    -- ---------- trigger 1: the remote ----------
+    local function hookRace(r)
+        if r:IsA("RemoteEvent") and r.Name == "RE/LiveEvents/Began" then
+            r.OnClientEvent:Connect(function(name, _, info)
+                if tostring(name) ~= RACE_EVENT then return end
+                local joinEndsAt = type(info) == "table" and info.JoinEndsAt or nil
+                task.spawn(onRaceStart, joinEndsAt)
+            end)
+            print("[RacingWebhook] hooked " .. r:GetFullName())
+        end
+    end
+
+    for _, d in ipairs(RS:GetDescendants()) do hookRace(d) end
+    RS.DescendantAdded:Connect(hookRace)
+
+    -- ---------- trigger 2: workspace attribute ----------
+    workspace:GetAttributeChangedSignal("RaceRallyRunning"):Connect(function()
+        if workspace:GetAttribute("RaceRallyRunning") == true then
+            task.wait(0.5)
+            task.spawn(onRaceStart, workspace:GetAttribute("RaceRallyJoinEndsAt"))
+        end
+    end)
+
+    -- ---------- trigger 3: timer says "Race open!" ----------
+    task.spawn(function()
+        while true do
+            local ok, text = pcall(readTimerText)
+            if ok and text and text:lower():find("race open") then
+                task.spawn(onRaceStart, nil)
+            end
+            task.wait(0.5)
+        end
+    end)
+
+    local secs = secondsUntilNextRace()
+    print("[RacingWebhook] running. Next race in "
+        .. (secs and (math.floor(secs / 60) .. "m " .. secs % 60 .. "s") or "?"))
 end
 
 print("[EGG] running!")
