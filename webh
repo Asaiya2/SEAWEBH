@@ -171,7 +171,7 @@ local RARE_EGGS = {
     ["world burner"]   = { tier = "Divine", value = "5B/s",   image = IMG("World_Burner.png"),          role = "1558518928144208012" },
     ["archangel"]      = { tier = "Divine", value = "3B/s",   image = IMG("ArchAngel.png"),             role = "1558519073208537108" },
     ["royal skywhale"] = { tier = "Divine", value = "8B/s",   image = GH .. "skywhale.png?raw=true",    role = "1558519461114286151" },
-    ["nightflame"]     = { tier = "Divine", value = "3B/s",   image = IMG("Nightflame.png"),            role = "1558519547139461120" },
+    ["nightflame"] = { tier = "Divine", value = "3B/s", image = "https://stealanegg.tools/images/Nightflame.png", role = "1558519547139461120" },
     ["kitsune"]        = { tier = "Divine", value = "1.8B/s", image = IMG("Kitsune.png"),               role = "1558519659647606865" },
     ["unicorn"]        = { tier = "Divine", value = "1B/s",   image = IMG("Unicorn.png"),               role = "1558519726102159440" },
 
