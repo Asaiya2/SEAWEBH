@@ -189,7 +189,7 @@ local RARE_EGGS = {
     ["phoenix"]              = { tier = "Eternal", value = "85M/s",  image = IMG("phoenix.png"),        role = "1558521741762896013" },
 
     -- ===== SECRET =====
-    ["king snake"]      = { tier = "Secret", role = "1558521606333014017" },
+    ["king snake"]      = { tier = "Secret", value = "3.5M/s"  image = "https://stealanegg.tools/images/King_Snake.png" role = "1558521606333014017" },
     ["yeti"]            = { tier = "Secret", value = "5M/s",   image = IMG("White_Yeti.png"),      role = "1558521675308335205" },
     ["cerberus"]        = { tier = "Secret", value = "8M/s",   image = IMG("Cerberus_Flame.png"),  role = "1558521813615775744" },
     ["kraken"]          = { tier = "Secret", value = "15M/s",
