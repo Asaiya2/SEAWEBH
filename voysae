@@ -164,7 +164,7 @@ end
 -- ===================== PERSISTENT HUNT WINDOW =====================
 -- Length of the hopping window that starts when a selected egg is found.
 -- 300 = 5 minutes (eggs refresh every 5 minutes).
-local RARITY_DURATION = 300
+local RARITY_DURATION = 270
 
 -- This file survives script re-execution and teleporting to another server.
 local TIMER_FILE = "egg_rarity_hunt_timer.json"
