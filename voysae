@@ -28,7 +28,7 @@ if not game:IsLoaded() then game.Loaded:Wait() end
 
 -- ===================== WEBHOOKS =====================
 -- ONE webhook used for everything. Change it here to change every alert.
-local DEFAULT_WEBHOOK = "https://discord.com/api/webhooks/1557916571718909952/wgj2OPzlegW9j0oITUtkv-CAJFoYgUrggczqMCqicyixlHvgj8VBSYA5IOGrxe8j5wFB"
+local DEFAULT_WEBHOOK = "https://discord.com/api/webhooks/1560112474475331604/AJrLwB0G7C8jeSP3-qTbxXrCmlYa9P18o2EufBMYF1cW7E8NI5yCsnHNAp0yr5DRjczs"
 
 local WEBHOOKS = {
     Secret  = DEFAULT_WEBHOOK,
@@ -68,7 +68,7 @@ end
 
 -- Role pings by egg value (money/s, includes mutation bonuses). First match wins.
 local VALUE_PINGS = {
-    { min = 100e9, role = "1557923158764290048" },  -- 100B or more
+    { min = 10e9, role = "1555131589745446992" },  -- 10B or more
     { min = 5e9,  role = "1557923158764290048" },  -- 5B - 100B
     { min = 1e9,   role = "1557926807251193986" },  -- 1B - 10B
     { min = 1,     role = "1557926807251193986" },  -- 1 - 1B
@@ -94,11 +94,11 @@ local KG_DECIMALS        = 0      -- 0 = "65K", 1 = "65.6K"  (use 2 to see e.g. 
 local DEBUG_DUMP         = true   -- true: prints every field of an alerted egg to the console (to find mutation data)
 -- Redirect page that opens the roblox:// join link (upload join.html there).
 -- Leave "" to fall back to the old roblox.com link, which does NOT join the right server.
-local JOIN_PAGE          = "https://worstasaiya.github.io/ASAIYASITE/join.html"
+local JOIN_PAGE          = "https://worstasaiya.github.io/worst/worst.html"
 
 -- ===================== SCRAMBLE SETTINGS =====================
-local SCRAMBLE_ENABLED    = true
-local SCRAMBLE_WEBHOOK    = "https://discord.com/api/webhooks/1558298659190345829/QgYU0KGCPMSnnjhj9ShruZLxdH-jw40I0bWlRS1ed6EKDOlvmf4hZ_tMciAsYJmF9YaC"  -- "" = use WEBHOOKS.Secret
+local SCRAMBLE_ENABLED    = false
+local SCRAMBLE_WEBHOOK    = ""  -- "" = use WEBHOOKS.Secret
 local SCRAMBLE_ROLE       = ""               -- optional role ping for the first Scramble message
 local SCRAMBLE_EDIT_EVERY = 10               -- seconds between edits while the boss is alive
 
@@ -121,7 +121,7 @@ local MAX_PLAYERS   = 3           -- skip servers with more players than this (c
 -- MULTI-ACCOUNT: list the exact Roblox usernames of EVERY account running this script
 -- (same list, same order, on all of them). Each account then only hops to its own share
 -- of the servers, so they never pick the same one. Leave empty for a single account.
-local ACCOUNTS = { "GGWORSTNOTIFIER", "REDFSAE4", "REDFSAE5", "REDFSAE6", "VOYSAE2" }
+local ACCOUNTS = { "GGWORSTNOTIFIER", "Voysae2", "worstvip" }
 local VISITED_FILE  = "egg_hop_visited.json"
 local VISITED_TTL   = 900         -- don't revisit a server for this many seconds
 local POOL_FILE     = "egg_hop_pool_asc.json"
@@ -255,7 +255,7 @@ local STYLE = {
 
 local BOT_NAME    = "WORST • Steal An Egg"
 local BOT_AVATAR  = "https://github.com/Asaiya2/steal-an-egg/blob/main/neW.png?raw=true"
-local FOOTER_TEXT = "Voysae's personal Notifier"
+local FOOTER_TEXT = "WORST's Notifier"
 
 local IMAGES = {
     ["kitsune"]        = "https://asaiya2.github.io/steal-an-egg/Kitsune.png",
