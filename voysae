@@ -53,9 +53,9 @@ end
 
 -- Role pings by egg weight (kg). First match from the top wins.
 local KG_PINGS = {
-    { min = 10000000, role = "1557926807251193986" },
-    { min = 100000,  role = " " },
-    { min = 1,       role = " " },
+    { min = 10000000, role = "1556964378094338079" },
+    { min = 100000,  role = "1556964342656671805" },
+    { min = 1,       role = "1556964297983397900" },
 }
 
 local function kgRole(kg)
@@ -68,10 +68,9 @@ end
 
 -- Role pings by egg value (money/s, includes mutation bonuses). First match wins.
 local VALUE_PINGS = {
-    { min = 10e9, role = "1555131589745446992" },  -- 10B or more
-    { min = 5e9,  role = "1557923158764290048" },  -- 5B - 100B
-    { min = 1e9,   role = "1557926807251193986" },  -- 1B - 10B
-    { min = 1,     role = "1557926807251193986" },  -- 1 - 1B
+    { min = 10e9, role = "1557748763710332949" },  -- 10B or more
+    { min = 1e9,   role = "1557748744005361704" },  -- 1B - 10B
+    { min = 1,     role = "1557748744005361704" },  -- 1 - 1B
 }
 
 local function valueRole(value)
