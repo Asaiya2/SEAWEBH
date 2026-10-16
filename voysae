@@ -801,6 +801,47 @@ end
 local FEED_PUSH_URL = "https://eggfeed.asaiyamain.workers.dev/push"
 local FEED_KEY      = "09123744541WORSTASAIYA"
 
+-- ---------------- ACCOUNT HEARTBEAT (feeds the admin "Accounts" dropdown on the site) ----------------
+-- Sends a tiny status ping about once a minute, once on join, and once right before each hop.
+-- The names in ACCOUNTS (top of this file) are the roster, so that list is the only place to edit.
+local HEARTBEAT_URL   = (FEED_PUSH_URL:gsub("/push$", "/heartbeat"))
+local HEARTBEAT_EVERY = 60
+
+local function myAccountName()
+    local me = Players.LocalPlayer and Players.LocalPlayer.Name or ""
+    for _, n in ipairs(ACCOUNTS) do
+        if tostring(n):lower() == me:lower() then return tostring(n) end
+    end
+    return me
+end
+
+local heartbeatOk = false
+local function sendHeartbeat()
+    if not httpRequest or HEARTBEAT_URL == "" then return end
+    local name = myAccountName()
+    if name == "" then return end
+    local roster = {}
+    for _, n in ipairs(ACCOUNTS) do roster[#roster + 1] = tostring(n) end
+    if #roster == 0 then roster[1] = name end
+    local ok, res = pcall(httpRequest, {
+        Url = HEARTBEAT_URL, Method = "POST",
+        Headers = { ["Content-Type"] = "application/json", ["x-key"] = FEED_KEY },
+        Body = HttpService:JSONEncode({
+            name = name,
+            roster = roster,
+            state = huntActive() and "hopping" or "waiting",
+            huntRemaining = huntRemaining(),
+        }),
+    })
+    local code = ok and type(res) == "table" and tonumber(res.StatusCode) or nil
+    if code == 200 then
+        if not heartbeatOk then heartbeatOk = true print("[EGG KG] account heartbeat OK (" .. name .. ")") end
+    else
+        -- 401 = key does not match PUSH_KEY, 404 = Worker not updated, nil = request blocked/failed
+        warn("[EGG KG] account heartbeat FAILED, status " .. tostring(code or res))
+    end
+end
+
 local function pushFeed(info, kg, mutation)
     if not httpRequest or FEED_PUSH_URL == "" then return end
     pcall(httpRequest, {
@@ -1585,6 +1626,9 @@ local function hopLoop()
             -- Scramble message: set it to "Not in server anymore" BEFORE we leave
             pcall(Scramble.beforeLeave)
 
+            -- last check-in from this server before we leave
+            pcall(sendHeartbeat)
+
             teleporting = true
             local tp0 = os.clock()
             local ok, err = pcall(function()
@@ -1687,6 +1731,14 @@ local function scan()
         if now - t > FORGET_SECONDS then seen[uid] = nil end
     end
 end
+
+-- account heartbeat loop (starts only when the scanner is actually working)
+task.spawn(function()
+    while true do
+        pcall(sendHeartbeat)
+        task.wait(HEARTBEAT_EVERY)
+    end
+end)
 
 print("[EGG KG] running. Hopping " .. (HOP_ENABLED and "ON" or "OFF")
     .. " for: " .. table.concat(HOP_FOR, ", ")
