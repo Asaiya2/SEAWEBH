@@ -301,6 +301,54 @@ local RS              = game:GetService("ReplicatedStorage")
 local Players         = game:GetService("Players")
 local TeleportService = game:GetService("TeleportService")
 
+-- ============================================================
+-- PERFORMANCE SAVER
+-- ============================================================
+local DISABLE_3D_RENDERING = true   -- stops drawing the 3D world (biggest FPS/CPU/GPU saver)
+local FPS_CAP              = 15     -- 0 = don't touch. Lower = less CPU. Keep 10+ so task.wait timing stays accurate
+local LOWEST_GRAPHICS      = true   -- drops graphics quality to level 1
+local MUTE_SOUNDS          = true   -- silences game audio
+
+local RunService = game:GetService("RunService")
+
+local function applyPerformanceSaver()
+    if DISABLE_3D_RENDERING then
+        pcall(function() RunService:Set3dRenderingEnabled(false) end)
+    end
+
+    if FPS_CAP and FPS_CAP > 0 and type(setfpscap) == "function" then
+        pcall(setfpscap, FPS_CAP)
+    end
+
+    if LOWEST_GRAPHICS then
+        pcall(function() settings().Rendering.QualityLevel = Enum.QualityLevel.Level01 end)
+        pcall(function()
+            local Lighting = game:GetService("Lighting")
+            Lighting.GlobalShadows = false
+            Lighting.FogEnd = 9e9
+        end)
+    end
+
+    if MUTE_SOUNDS then
+        pcall(function() game:GetService("SoundService").Volume = 0 end)
+        pcall(function() UserSettings():GetService("UserGameSettings").MasterVolume = 0 end)
+    end
+end
+
+applyPerformanceSaver()
+
+-- Roblox sometimes re-enables rendering (respawn, focus change), so re-apply it every few seconds
+if DISABLE_3D_RENDERING then
+    task.spawn(function()
+        while true do
+            task.wait(5)
+            if not (type(getgenv) == "function" and getgenv().EGGKG_SHOW_3D == true) then
+                pcall(function() RunService:Set3dRenderingEnabled(false) end)
+            end
+        end
+    end)
+end
+
 local httpRequest = request or http_request or (syn and syn.request) or (http and http.request)
 
 -- ============================================================
@@ -1090,6 +1138,14 @@ local function makeTestButton()
     makeButton("Send all mutations", -60, Color3.fromRGB(46, 204, 113), sendAllMutations)
     -- original button
     makeButton("Send Server Link (Test)", 0, Color3.fromRGB(52, 152, 219), sendTestInvite)
+
+    -- toggle 3D rendering on/off
+    local rendering3d = not DISABLE_3D_RENDERING
+    makeButton("Toggle 3D rendering", 60, Color3.fromRGB(230, 126, 34), function()
+        rendering3d = not rendering3d
+        if type(getgenv) == "function" then getgenv().EGGKG_SHOW_3D = rendering3d end
+        RunService:Set3dRenderingEnabled(rendering3d)
+    end)
 end
 
 pcall(makeTestButton)
