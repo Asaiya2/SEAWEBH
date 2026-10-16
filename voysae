@@ -120,7 +120,7 @@ local MAX_PLAYERS   = 3           -- skip servers with more players than this (c
 -- MULTI-ACCOUNT: list the exact Roblox usernames of EVERY account running this script
 -- (same list, same order, on all of them). Each account then only hops to its own share
 -- of the servers, so they never pick the same one. Leave empty for a single account.
-local ACCOUNTS = { "GGWORSTNOTIFIER", "Voysae2", "worstvip", "ibwiwbdosb" }
+local ACCOUNTS = { "GGWORSTNOTIFIER", "worstvip", "ibwiwbdosb" }
 local VISITED_FILE  = "egg_hop_visited.json"
 local VISITED_TTL   = 900         -- don't revisit a server for this many seconds
 local POOL_FILE     = "egg_hop_pool_asc.json"
