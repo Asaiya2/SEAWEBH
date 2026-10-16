@@ -61,7 +61,7 @@ local ROLES = {
 -- ============================================================
 
 local SITE = {
-    URL = "https://eggfeed.asaiyamain.workers.dev/alert",
+    URL = "",
     KEY = "09123744541WORSTASAIYA",
 }
 
