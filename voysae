@@ -302,7 +302,7 @@ local IMAGES = {
     ["graveyard brute"]  = "https://stealanegg.tools/images/Graveyard_Brute_Pet.png",
     ["werewolf"]         = "https://stealanegg.tools/images/Werewolf_Pet.png",
     ["ghost reaper"]     = "https://stealanegg.tools/images/Ghost_Reaper_Pet.png",
-    ["gorillastein"]     = "???",   -- no image yet (not a real link, so it is skipped in the Discord embed)
+    ["gorillastein"]     = "https://stealanegg.tools/images/Abomination_Kong_Pet.png",   -- no image yet (not a real link, so it is skipped in the Discord embed)
     ["voidseer pumpkin"] = "https://stealanegg.tools/images/Voidseer_Pumpkin_Pet.png",
 }
 
