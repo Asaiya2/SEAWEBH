@@ -101,6 +101,14 @@ local SCRAMBLE_WEBHOOK    = ""  -- "" = use WEBHOOKS.Secret
 local SCRAMBLE_ROLE       = ""               -- optional role ping for the first Scramble message
 local SCRAMBLE_EDIT_EVERY = 10               -- seconds between edits while the boss is alive
 
+-- ===================== HALLOWEEN SETTINGS =====================
+-- Sends a SECOND webhook message in every server: "Found none", or the egg(s) found
+-- in the Halloween Dimension (Secret / Eternal / Divine only, per HOP_FOR).
+local HALLOWEEN_ENABLED = true
+local HALLOWEEN_WEBHOOK = ""    -- "" = use WEBHOOKS.Secret
+local HALLOWEEN_GRACE   = 6     -- seconds to wait after joining before saying "Found none" (lets the dimension load)
+local HALLOWEEN_DEBUG   = true  -- prints what the scanner sees (turn off once you've confirmed it works)
+
 -- Minimum kg needed to send an alert, per tier (0 = always send).
 local MIN_KG = {
     Secret  = 0,
@@ -302,7 +310,7 @@ local IMAGES = {
     ["graveyard brute"]  = "https://stealanegg.tools/images/Graveyard_Brute_Pet.png",
     ["werewolf"]         = "https://stealanegg.tools/images/Werewolf_Pet.png",
     ["ghost reaper"]     = "https://stealanegg.tools/images/Ghost_Reaper_Pet.png",
-    ["gorillastein"]     = "https://stealanegg.tools/images/Abomination_Kong_Pet.png",   -- no image yet (not a real link, so it is skipped in the Discord embed)
+    ["gorillastein"]     = "https://stealanegg.tools/images/Abomination_Kong_Pet.png",
     ["voidseer pumpkin"] = "https://stealanegg.tools/images/Voidseer_Pumpkin_Pet.png",
 }
 
@@ -1498,6 +1506,253 @@ do
 end
 
 -- ============================================================
+-- HALLOWEEN DIMENSION TRACKER
+-- These eggs are NOT in EggState.ReadFieldEggs, so they get their own scanner.
+-- Reads Workspace.HalloweenDimension.WorldEggs (Zone 2 / Haunted Swamp is skipped).
+-- Per server it sends ONE message:
+--   "Found none"       when no selected-rarity egg is there
+--   the egg embed(s)   when there is one (and if an egg shows up later, the same
+--                      message is edited, replacing "Found none")
+-- ============================================================
+local Halloween = { ready = not HALLOWEEN_ENABLED, busy = false }
+
+if HALLOWEEN_ENABLED then
+    task.spawn(function()
+        if not httpRequest then Halloween.ready = true return end
+
+        local ZONES = { [1] = "Graveyard", [3] = "Abandoned Manor" }
+        local SKIP_ZONES = { [2] = true }
+
+        -- key = PreparedSourceName, lowercase, no spaces
+        local EGGS = {
+            -- Zone 1: Graveyard
+            ["whiskers"]        = { name = "Whiskers",        tier = "Epic" },
+            ["jesterpop"]       = { name = "Jesterpop",       tier = "Legendary" },
+            ["candlefang"]      = { name = "Candlefang",      tier = "Mythic" },
+            ["spiritknight"]    = { name = "Spirit Knight",   tier = "Cosmic" },
+            ["graveyardbrute"]  = { name = "Graveyard Brute", tier = "Secret",  value = "75M/s" },
+            ["ghostreaper"]     = { name = "Ghost Reaper",    tier = "Eternal", value = "300M/s" },
+            -- Zone 3: Abandoned Manor
+            ["halloweenroyalmimicegg"] = { name = "Mimic Chest", tier = "Legendary" },
+            ["mimicchest"]      = { name = "Mimic Chest",     tier = "Legendary" },
+            ["crowshade"]       = { name = "Crowshade",       tier = "Mythic" },
+            ["hexedpumpkin"]    = { name = "Hexed Pumpkin",   tier = "Cosmic" },
+            ["dreadwolf"]       = { name = "Werewolf",        tier = "Secret",  value = "1.3B/s" },
+            ["werewolf"]        = { name = "Werewolf",        tier = "Secret",  value = "1.3B/s" },
+            ["frankensteinkongegg"] = { name = "Gorillastein", tier = "Eternal", value = "3.5B/s" },
+            ["abominationkong"] = { name = "Gorillastein",    tier = "Eternal", value = "3.5B/s" },
+            ["gorillastein"]    = { name = "Gorillastein",    tier = "Eternal", value = "3.5B/s" },
+            ["voidseerpumpkin"] = { name = "Voidseer Pumpkin", tier = "Divine", value = "14B/s" },
+        }
+
+        local reported = {}
+
+        -- returns: list of selected-rarity eggs, folderFound, totalEggsSeen
+        local function scanEggs()
+            local dim    = workspace:FindFirstChild("HalloweenDimension")
+            local folder = dim and dim:FindFirstChild("WorldEggs")
+            local list, total = {}, 0
+            if not folder then return list, false, 0 end
+
+            for _, m in ipairs(folder:GetChildren()) do
+                local zone = tonumber(m:GetAttribute("Zone")) or 0
+                if not SKIP_ZONES[zone] then
+                    total = total + 1
+                    local src  = m:GetAttribute("PreparedSourceName")
+                    local info = src and EGGS[norm(src)]
+
+                    if not info then
+                        local key = m:GetFullName() .. tostring(m:GetAttribute("HalloweenEggUid"))
+                        if not reported[key] then
+                            reported[key] = true
+                            local a = {}
+                            for k, v in pairs(m:GetAttributes()) do a[#a + 1] = k .. "=" .. tostring(v) end
+                            print("[HALLOWEEN] unidentified egg, zone " .. zone .. ", attrs: " .. table.concat(a, ", "))
+                        end
+                    elseif RARE[info.tier] then
+                        list[#list + 1] = {
+                            uid   = tostring(m:GetAttribute("HalloweenEggUid") or m:GetFullName()),
+                            name  = info.name,
+                            tier  = info.tier,
+                            zone  = zone,
+                            value = info.value,
+                        }
+                    end
+                end
+            end
+            return list, true, total
+        end
+
+        local function embedFor(e)
+            local style = STYLE[e.tier]
+            local link = serverLink()
+            local fields = {
+                { name = "🥚 Egg",    value = "**" .. e.name .. " Egg**", inline = true },
+                { name = "💎 Rarity", value = "**" .. e.tier .. "**",     inline = true },
+                { name = "🔗 Server", value = link and ("[**Click to Join Server**](" .. link .. ")") or "**Unavailable**", inline = true },
+                { name = "📍 Zone",   value = "**" .. (ZONES[e.zone] or "Halloween Dimension") .. "** (Zone " .. tostring(e.zone) .. ")", inline = false },
+                { name = "💰 Egg Value", value = "```" .. (e.value or "Unknown") .. "```", inline = false },
+            }
+            local embed = {
+                title       = "🎃  HALLOWEEN " .. style.title .. "  🎃",
+                description = "*" .. style.tag .. "*\n" .. playerInfoText(),
+                color       = style.color,
+                fields      = fields,
+                footer      = { text = FOOTER_TEXT .. " • Halloween " .. e.tier .. " Alert" },
+                timestamp   = os.date("!%Y-%m-%dT%H:%M:%SZ", os.time()),
+            }
+            local img = IMAGES_N[norm(e.name)]
+            if img and tostring(img):find("^https?://") then embed.thumbnail = { url = img } end
+            return embed
+        end
+
+        local function noneEmbed()
+            local link = serverLink()
+            return {
+                title       = "🎃  HALLOWEEN DIMENSION  🎃",
+                description = "**Found none**\n" .. playerInfoText(),
+                color       = 0x95A5A6,
+                fields      = { { name = "🔗 Server", value = link and ("[**Click to Join Server**](" .. link .. ")") or "**Unavailable**", inline = false } },
+                footer      = { text = FOOTER_TEXT .. " • Halloween Scan" },
+                timestamp   = os.date("!%Y-%m-%dT%H:%M:%SZ", os.time()),
+            }
+        end
+
+        local function payloadFor(list, ping)
+            if #list == 0 then
+                return {
+                    content = "🎃 **Halloween Dimension:** Found none",
+                    embeds  = { noneEmbed() },
+                    allowed_mentions = { parse = {} },
+                }
+            end
+
+            local names, embeds, mention, roleSeen = {}, {}, "", {}
+            for i, e in ipairs(list) do
+                names[#names + 1] = "**" .. e.name .. " Egg**"
+                if i <= 10 then embeds[#embeds + 1] = embedFor(e) end
+                local r = cleanRole(ROLE_IDS[e.tier])
+                if r ~= "" and not roleSeen[r] then
+                    roleSeen[r] = true
+                    mention = mention .. "<@&" .. r .. "> "
+                end
+            end
+            return {
+                content = (ping and mention or "") .. "🎃 " .. table.concat(names, ", ") .. " in the Halloween Dimension",
+                embeds  = embeds,
+                allowed_mentions = ping and { parse = { "roles" } } or { parse = {} },
+            }
+        end
+
+        local function request(method, url, payload)
+            for _ = 1, 4 do
+                local ok, res = pcall(httpRequest, {
+                    Url = url, Method = method,
+                    Headers = { ["Content-Type"] = "application/json" },
+                    Body = HttpService:JSONEncode(payload),
+                })
+                if ok and type(res) == "table" then
+                    local code = tonumber(res.StatusCode)
+                    if code == 429 then
+                        local wait = 1
+                        pcall(function() wait = tonumber(HttpService:JSONDecode(res.Body).retry_after) or 1 end)
+                        task.wait(wait + 0.1)
+                    elseif code and code >= 200 and code < 300 then
+                        return res
+                    else
+                        warn("[HALLOWEEN] webhook failed, status " .. tostring(code) .. " " .. tostring(res.Body))
+                        return nil
+                    end
+                else
+                    task.wait(1)
+                end
+            end
+            return nil
+        end
+
+        local url = (HALLOWEEN_WEBHOOK ~= "" and HALLOWEEN_WEBHOOK) or WEBHOOKS.Secret
+        if not validUrl(url) then
+            warn("[HALLOWEEN] webhook not set or invalid")
+            Halloween.ready = true
+            return
+        end
+
+        local startedAt = os.clock()
+        local msgId, retryAt = nil, 0
+        local shown = {}       -- uid -> true, eggs already in the message
+        local lastDebug = ""
+
+        while true do
+            local ok, err = pcall(function()
+                local list, hasFolder, total = scanEggs()
+
+                if HALLOWEEN_DEBUG then
+                    local sig = tostring(hasFolder) .. ":" .. total .. ":" .. #list
+                    if sig ~= lastDebug then
+                        lastDebug = sig
+                        print("[HALLOWEEN] WorldEggs folder " .. (hasFolder and "found" or "NOT found")
+                            .. ", eggs seen: " .. total .. ", selected rarity: " .. #list)
+                    end
+                end
+
+                local fresh = false
+                for _, e in ipairs(list) do
+                    if not shown[e.uid] then fresh = true end
+                end
+
+                if not msgId then
+                    local graceOver = (os.clock() - startedAt) >= HALLOWEEN_GRACE
+                    if (#list > 0 or graceOver) and os.clock() >= retryAt then
+                        Halloween.busy = true
+                        local res = request("POST", url .. "?wait=true", (function()
+                            local pl = payloadFor(list, true)
+                            pl.username = BOT_NAME
+                            pl.avatar_url = (BOT_AVATAR ~= "") and BOT_AVATAR or nil
+                            return pl
+                        end)())
+                        if res then
+                            pcall(function() msgId = HttpService:JSONDecode(res.Body).id end)
+                        end
+                        if msgId then
+                            for _, e in ipairs(list) do
+                                shown[e.uid] = true
+                                markSelectedSpawn()
+                                print("[HALLOWEEN] rare spotted: " .. e.name .. " (" .. e.tier .. ")")
+                            end
+                            if #list == 0 then print("[HALLOWEEN] sent 'Found none'") end
+                        else
+                            retryAt = os.clock() + 15
+                            warn("[HALLOWEEN] message failed to send, retrying in 15s")
+                        end
+                        Halloween.busy = false
+                        Halloween.ready = true
+                    end
+                elseif fresh then
+                    -- an egg showed up after "Found none" (or another one appeared): edit the same message
+                    Halloween.busy = true
+                    local res = request("PATCH", url .. "/messages/" .. msgId, payloadFor(list, false))
+                    if res then
+                        for _, e in ipairs(list) do
+                            if not shown[e.uid] then
+                                shown[e.uid] = true
+                                markSelectedSpawn()
+                                print("[HALLOWEEN] rare spotted: " .. e.name .. " (" .. e.tier .. ")")
+                            end
+                        end
+                    end
+                    Halloween.busy = false
+                end
+            end)
+            if not ok then
+                Halloween.busy = false
+                warn("[HALLOWEEN] error: " .. tostring(err))
+            end
+            task.wait(1)
+        end
+    end)
+end
+
+-- ============================================================
 -- SERVER HOPPER
 -- ============================================================
 
@@ -1674,9 +1929,13 @@ local function hopLoop()
     local t0 = os.clock()
     while not firstScanDone and os.clock() - t0 < 40 do task.wait(0.2) end
 
+    -- wait for the Halloween check ("Found none" / egg message) to be sent
+    t0 = os.clock()
+    while not Halloween.ready and os.clock() - t0 < (HALLOWEEN_GRACE + 15) do task.wait(0.2) end
+
     -- then let any webhook go out
     t0 = os.clock()
-    while (#queue > 0 or sendBusy) and os.clock() - t0 < 20 do task.wait(0.2) end
+    while (#queue > 0 or sendBusy or Halloween.busy) and os.clock() - t0 < 20 do task.wait(0.2) end
 
     while HOP_ENABLED and not stopped() and huntActive() do
         -- random jitter so the accounts don't all hit Roblox at the same moment
