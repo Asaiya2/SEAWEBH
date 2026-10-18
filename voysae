@@ -1,6 +1,6 @@
 -- Voysae
 -- ============================================================
---  RARE EGG KG NOTIFIER + CONFIGURABLE RARITY SERVER HOPPER  (v5.2, scramble tracker)
+--  RARE EGG KG NOTIFIER + CONFIGURABLE RARITY SERVER HOPPER  (v5.3, scramble tracker + halloween site push)
 --  Standalone, made for auto execute.
 --  1) Watches the field only for the rarities selected in HOP_FOR and
 --     posts a Discord embed with the egg's kg, mutation and money/s.
@@ -21,6 +21,9 @@
 --     - Every edit refreshes a "Last updated" time, so a message that stopped
 --       updating (account closed or crashed) shows how stale it is.
 --     - Scramble NEVER starts hopping by itself. Only a listed rare egg does.
+--  5) HALLOWEEN -> LIVE SPAWN PAGE (new in v5.3):
+--     - Rare Halloween Dimension eggs are also sent to the Worker (/push and
+--       /alert) so they show up on the Live Spawn page. Switch: HALLOWEEN_SITE.
 --  Stop hopping by hand: run   getgenv().EGGKG_STOP = true
 -- ============================================================
 
@@ -109,6 +112,7 @@ local HALLOWEEN_WEBHOOK = ""    -- "" = use WEBHOOKS.Secret
 local HALLOWEEN_GRACE   = 6     -- seconds to wait after joining before saying "Found none" (lets the dimension load)
 local HALLOWEEN_DEBUG   = true  -- prints what the scanner sees (turn off once you've confirmed it works)
 local HALLOWEEN_HOPS    = false -- false = Halloween eggs only send the webhook, they do NOT start the hop window
+local HALLOWEEN_SITE    = true  -- true = rare Halloween eggs are also sent to the Worker so they show on the Live Spawn page
 
 -- Minimum kg needed to send an alert, per tier (0 = always send).
 local MIN_KG = {
@@ -1530,6 +1534,8 @@ end
 --   "Found none"       when no selected-rarity egg is there
 --   the egg embed(s)   when there is one (and if an egg shows up later, the same
 --                      message is edited, replacing "Found none")
+-- NEW in v5.3: every rare egg found is ALSO sent once to the Worker
+-- (/push + /alert) so it appears on the Live Spawn page (HALLOWEEN_SITE).
 -- ============================================================
 local Halloween = { ready = not HALLOWEEN_ENABLED, busy = false }
 
@@ -1541,25 +1547,28 @@ if HALLOWEEN_ENABLED then
         local SKIP_ZONES = { [2] = true }
 
         -- key = PreparedSourceName, lowercase, no spaces
+        --   name  = name shown in Discord
+        --   site  = name the website uses (the page calls Gorillastein "Abomination Kong")
+        --   value = text for the Discord embed, num = money/s as a number for the website
         local EGGS = {
             -- Zone 1: Graveyard
             ["whiskers"]        = { name = "Whiskers",        tier = "Epic" },
             ["jesterpop"]       = { name = "Jesterpop",       tier = "Legendary" },
             ["candlefang"]      = { name = "Candlefang",      tier = "Mythic" },
             ["spiritknight"]    = { name = "Spirit Knight",   tier = "Cosmic" },
-            ["graveyardbrute"]  = { name = "Graveyard Brute", tier = "Secret",  value = "75M/s" },
-            ["ghostreaper"]     = { name = "Ghost Reaper",    tier = "Eternal", value = "300M/s" },
+            ["graveyardbrute"]  = { name = "Graveyard Brute", site = "Graveyard Brute", tier = "Secret",  value = "75M/s",  num = 75e6 },
+            ["ghostreaper"]     = { name = "Ghost Reaper",    site = "Ghost Reaper",    tier = "Eternal", value = "300M/s", num = 300e6 },
             -- Zone 3: Abandoned Manor
             ["halloweenroyalmimicegg"] = { name = "Mimic Chest", tier = "Legendary" },
             ["mimicchest"]      = { name = "Mimic Chest",     tier = "Legendary" },
             ["crowshade"]       = { name = "Crowshade",       tier = "Mythic" },
             ["hexedpumpkin"]    = { name = "Hexed Pumpkin",   tier = "Cosmic" },
-            ["dreadwolf"]       = { name = "Werewolf",        tier = "Secret",  value = "1.3B/s" },
-            ["werewolf"]        = { name = "Werewolf",        tier = "Secret",  value = "1.3B/s" },
-            ["frankensteinkongegg"] = { name = "Gorillastein", tier = "Eternal", value = "3.5B/s" },
-            ["abominationkong"] = { name = "Gorillastein",    tier = "Eternal", value = "3.5B/s" },
-            ["gorillastein"]    = { name = "Gorillastein",    tier = "Eternal", value = "3.5B/s" },
-            ["voidseerpumpkin"] = { name = "Voidseer Pumpkin", tier = "Divine", value = "14B/s" },
+            ["dreadwolf"]       = { name = "Werewolf",        site = "Werewolf",         tier = "Secret",  value = "1.3B/s", num = 1.3e9 },
+            ["werewolf"]        = { name = "Werewolf",        site = "Werewolf",         tier = "Secret",  value = "1.3B/s", num = 1.3e9 },
+            ["frankensteinkongegg"] = { name = "Gorillastein", site = "Abomination Kong", tier = "Eternal", value = "3.5B/s", num = 3.5e9 },
+            ["abominationkong"] = { name = "Gorillastein",    site = "Abomination Kong", tier = "Eternal", value = "3.5B/s", num = 3.5e9 },
+            ["gorillastein"]    = { name = "Gorillastein",    site = "Abomination Kong", tier = "Eternal", value = "3.5B/s", num = 3.5e9 },
+            ["voidseerpumpkin"] = { name = "Voidseer Pumpkin", site = "Voidseer Pumpkin", tier = "Divine", value = "14B/s", num = 14e9 },
         }
 
         local reported = {}
@@ -1590,6 +1599,8 @@ if HALLOWEEN_ENABLED then
                         list[#list + 1] = {
                             uid   = tostring(m:GetAttribute("HalloweenEggUid") or m:GetFullName()),
                             name  = info.name,
+                            site  = info.site or info.name,   -- NEW: name used on the website
+                            num   = info.num,                 -- NEW: money/s as a number
                             tier  = info.tier,
                             zone  = zone,
                             value = info.value,
@@ -1687,6 +1698,42 @@ if HALLOWEEN_ENABLED then
             return nil
         end
 
+        -- ---------------- NEW: send rare Halloween eggs to the Live Spawn page ----------------
+        local ALERT_URL = (FEED_PUSH_URL:gsub("/push$", "/alert"))
+        local pushedSite = {}   -- uid -> true, so each egg is sent to the site only once
+
+        local function pushHalloweenToSite(e)
+            if not HALLOWEEN_SITE or not httpRequest or FEED_PUSH_URL == "" then return end
+            if game.JobId == "" then return end
+
+            local valueText = e.num and formatMoney(e.num) or "Unknown"   -- "$1.30B/s": the page only reads this format
+            local eggName   = e.site .. " Egg"
+            local image     = IMAGES_N[norm(e.name)] or ""
+            local headers   = { ["Content-Type"] = "application/json", ["x-key"] = FEED_KEY }
+
+            -- 1) /push: key-holder view (join link) + Discord subscribers of the site
+            pcall(httpRequest, {
+                Url = FEED_PUSH_URL, Method = "POST", Headers = headers,
+                Body = HttpService:JSONEncode({
+                    egg = eggName, rarity = e.tier, kg = "?", mutation = "NONE",
+                    value = valueText, image = image, test = false,
+                    players = #Players:GetPlayers() .. "/" .. Players.MaxPlayers,
+                    placeId = tostring(game.PlaceId), jobId = game.JobId,
+                }),
+            })
+
+            -- 2) /alert: public view, history and voice alert
+            pcall(httpRequest, {
+                Url = ALERT_URL, Method = "POST", Headers = headers,
+                Body = HttpService:JSONEncode({
+                    type = "egg", egg = eggName, rarity = e.tier,
+                    location = ZONES[e.zone] or "Halloween Dimension",
+                    value = valueText, image = image, status = "Active",
+                }),
+            })
+            print("[HALLOWEEN] sent to Live Spawn page: " .. eggName)
+        end
+
         local url = (HALLOWEEN_WEBHOOK ~= "" and HALLOWEEN_WEBHOOK) or WEBHOOKS.Secret
         if not validUrl(url) then
             warn("[HALLOWEEN] webhook not set or invalid")
@@ -1702,6 +1749,14 @@ if HALLOWEEN_ENABLED then
         while true do
             local ok, err = pcall(function()
                 local list, hasFolder, total = scanEggs()
+
+                -- NEW: every rare egg goes to the website once, whether or not Discord worked
+                for _, e in ipairs(list) do
+                    if not pushedSite[e.uid] then
+                        pushedSite[e.uid] = true
+                        task.spawn(pushHalloweenToSite, e)
+                    end
+                end
 
                 if HALLOWEEN_DEBUG then
                     local sig = tostring(hasFolder) .. ":" .. total .. ":" .. #list
@@ -2338,7 +2393,8 @@ end)
 print("[EGG KG] running. Hopping " .. (HOP_ENABLED and "ON" or "OFF")
     .. " for: " .. table.concat(HOP_FOR, ", ")
     .. ". Custom entries: " .. #CUSTOM_EGGS
-    .. ". Scramble tracker " .. (SCRAMBLE_ENABLED and "ON" or "OFF"))
+    .. ". Scramble tracker " .. (SCRAMBLE_ENABLED and "ON" or "OFF")
+    .. ". Halloween site push " .. (HALLOWEEN_SITE and "ON" or "OFF"))
 
 -- runs forever: scan, and close the window when its time is up
 while true do
