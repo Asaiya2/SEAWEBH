@@ -297,6 +297,13 @@ local IMAGES = {
     ["trex"]            = "https://asaiya2.github.io/steal-an-egg/Block_TRex.png",
     ["starry fox"]      = "https://asaiya2.github.io/steal-an-egg/Starry_fox.png",
     ["stag"]            = "https://github.com/Asaiya2/steal-an-egg/blob/main/stag.webp?raw=true",
+
+    -- Halloween Manor / Graveyard
+    ["graveyard brute"]  = "https://stealanegg.tools/images/Graveyard_Brute_Pet.png",
+    ["werewolf"]         = "https://stealanegg.tools/images/Werewolf_Pet.png",
+    ["ghost reaper"]     = "https://stealanegg.tools/images/Ghost_Reaper_Pet.png",
+    ["gorillastein"]     = "???",   -- no image yet (not a real link, so it is skipped in the Discord embed)
+    ["voidseer pumpkin"] = "https://stealanegg.tools/images/Voidseer_Pumpkin_Pet.png",
 }
 
 -- ============================================================
@@ -947,7 +954,7 @@ local function sendAlert(info, kg, location, mutation)
         footer    = { text = FOOTER_TEXT .. " • " .. info.tier .. " Alert" },
         timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ", os.time()),
     }
-    if info.image and info.image ~= "" then
+    if info.image and tostring(info.image):find("^https?://") then
         embed.thumbnail = { url = info.image }
     end
 
