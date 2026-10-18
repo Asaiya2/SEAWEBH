@@ -108,6 +108,7 @@ local HALLOWEEN_ENABLED = true
 local HALLOWEEN_WEBHOOK = ""    -- "" = use WEBHOOKS.Secret
 local HALLOWEEN_GRACE   = 6     -- seconds to wait after joining before saying "Found none" (lets the dimension load)
 local HALLOWEEN_DEBUG   = true  -- prints what the scanner sees (turn off once you've confirmed it works)
+local HALLOWEEN_HOPS    = false -- false = Halloween eggs only send the webhook, they do NOT start the hop window
 
 -- Minimum kg needed to send an alert, per tier (0 = always send).
 local MIN_KG = {
@@ -243,6 +244,15 @@ local EGG_BASE = {
     mutantshark          = { income = 215e6, weight = 60000 },  -- ESTIMATED from 2 screenshots, not from the wiki
     starryfox            = { income = 750e6, weight = 1500 },   -- fitted from 4 screenshots (valid ~1,100 to 1,750 Kg)
     cosmicfox            = { income = 750e6, weight = 1500 },   -- alias of Starry Fox
+
+    -- Halloween: income = EarningRate from the game data, base weight 80 Kg (checked with the calculator)
+    graveyardbrute       = { income = 75e6,  weight = 80 },
+    werewolf             = { income = 1.3e9, weight = 80 },
+    ghostreaper          = { income = 300e6, weight = 80 },
+    gorillastein         = { income = 3.5e9, weight = 80 },
+    voidseerpumpkin      = { income = 14e9,  weight = 80 },
+    bloodbloom           = { income = 450e6, weight = 80 },     -- Haunted Swamp (income from game data, 80 Kg assumed)
+    shelltidevoyager     = { income = 1.6e9, weight = 80 },     -- Haunted Swamp (income from game data, 80 Kg assumed)
 }
 
 -- variant / mutation multipliers. They ADD together: 1 + sum(mult - 1)
@@ -257,6 +267,13 @@ local BONUS = {
     fractured   = 2.75,
     scrambled   = 2.75,
     enchanted   = 2.85,
+    nitro       = 2.75,
+    spectral    = 2.75,
+    -- internal ids the game may report instead of the display names
+    sakura      = 1.25,   -- Bloom
+    greatbloom  = 2.5,    -- Spirit Bloom
+    monstrous   = 3,      -- Parasite
+    boss        = 2.75,   -- Fractured
 }
 
 -- ===================== LOOK & FEEL =====================
@@ -1716,7 +1733,7 @@ if HALLOWEEN_ENABLED then
                         if msgId then
                             for _, e in ipairs(list) do
                                 shown[e.uid] = true
-                                markSelectedSpawn()
+                                if HALLOWEEN_HOPS then markSelectedSpawn() end
                                 print("[HALLOWEEN] rare spotted: " .. e.name .. " (" .. e.tier .. ")")
                             end
                             if #list == 0 then print("[HALLOWEEN] sent 'Found none'") end
@@ -1735,7 +1752,7 @@ if HALLOWEEN_ENABLED then
                         for _, e in ipairs(list) do
                             if not shown[e.uid] then
                                 shown[e.uid] = true
-                                markSelectedSpawn()
+                                if HALLOWEEN_HOPS then markSelectedSpawn() end
                                 print("[HALLOWEEN] rare spotted: " .. e.name .. " (" .. e.tier .. ")")
                             end
                         end
