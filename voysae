@@ -1774,6 +1774,213 @@ task.spawn(function()
     end
 end)
 
+local function applyBrockTreadmillAFK()
+    local ReplicatedStorage = RS
+    local Workspace = game:GetService("Workspace")
+    local localPlayer = Players.LocalPlayer
+    local enabled = true
+
+    local BROCK_ID = "BrockTreadmill"
+    local BROCK_MULT = 1000000000
+    local TITAN_COLOR = Color3.fromRGB(255, 64, 64)
+
+    local function unfreeze(tbl)
+        if type(tbl) ~= "table" then return tbl end
+        if setreadonly then pcall(setreadonly, tbl, false) end
+        if make_writeable then pcall(make_writeable, tbl) end
+        return tbl
+    end
+
+    local function safeHook(tbl, key, newFunc)
+        if type(tbl) ~= "table" then return false end
+        unfreeze(tbl)
+        local ok = pcall(function() tbl[key] = newFunc end)
+        if not ok and hookfunction and type(tbl[key]) == "function" then
+            local hOk = pcall(function() return hookfunction(tbl[key], newFunc) end)
+            if hOk then return true end
+        end
+        return ok
+    end
+
+    pcall(function()
+        local CmdrClient = require(ReplicatedStorage:WaitForChild("CmdrClient"))
+        if CmdrClient and CmdrClient.Dispatcher and CmdrClient.Dispatcher.EvaluateAndRun then
+            CmdrClient.Dispatcher:EvaluateAndRun("useBrockTreadmill " .. localPlayer.Name .. " " .. tostring(enabled))
+        end
+    end)
+
+    pcall(function()
+        localPlayer:SetAttribute("TreadmillOverride", enabled and BROCK_ID or nil)
+    end)
+
+    pcall(function()
+        local treadmillsMod = require(ReplicatedStorage.Data.Treadmills)
+        unfreeze(treadmillsMod)
+        unfreeze(treadmillsMod.Directory)
+
+        local brockConfig = (treadmillsMod.SessionOnly and treadmillsMod.SessionOnly.BrockTreadmill) or {
+            _id = BROCK_ID,
+            DisplayName = "Brock Treadmill",
+            SpeedMultiplier = BROCK_MULT,
+            Price = 0,
+            Icon = "",
+            DisplayInShop = false,
+            Rarity = {
+                _id = "Titan",
+                DisplayName = "Titan",
+                Color = TITAN_COLOR,
+                Rank = 11
+            }
+        }
+
+        pcall(function() treadmillsMod.Directory[BROCK_ID] = brockConfig end)
+
+        if enabled then
+            if not getgenv()._OldTreadmillResolve then
+                getgenv()._OldTreadmillResolve = treadmillsMod.ResolveForPlayer
+                getgenv()._OldTreadmillGetUpgrade = treadmillsMod.GetByUpgradeLevel
+                getgenv()._OldTreadmillGetById = treadmillsMod.GetById
+            end
+
+            safeHook(treadmillsMod, "ResolveForPlayer", function(p)
+                if p == localPlayer then return brockConfig end
+                if getgenv()._OldTreadmillResolve then return getgenv()._OldTreadmillResolve(p) end
+                return brockConfig
+            end)
+            safeHook(treadmillsMod, "GetByUpgradeLevel", function(...) return brockConfig end)
+            safeHook(treadmillsMod, "GetById", function(id)
+                if id == BROCK_ID then return brockConfig end
+                if getgenv()._OldTreadmillGetById then return getgenv()._OldTreadmillGetById(id) end
+                return brockConfig
+            end)
+        else
+            if getgenv()._OldTreadmillResolve then
+                safeHook(treadmillsMod, "ResolveForPlayer", getgenv()._OldTreadmillResolve)
+                safeHook(treadmillsMod, "GetByUpgradeLevel", getgenv()._OldTreadmillGetUpgrade)
+                safeHook(treadmillsMod, "GetById", getgenv()._OldTreadmillGetById)
+            end
+        end
+    end)
+
+    pcall(function()
+        local TreadmillUtil = require(ReplicatedStorage.Shared.Util.TreadmillUtil)
+        unfreeze(TreadmillUtil)
+        if enabled then
+            if not getgenv()._OldResolveSpeedPerStep then
+                getgenv()._OldResolveSpeedPerStep = TreadmillUtil.ResolveSpeedPowerPerStep
+            end
+            safeHook(TreadmillUtil, "ResolveSpeedPowerPerStep", function(saveData, mult, ...)
+                if getgenv()._OldResolveSpeedPerStep then
+                    return getgenv()._OldResolveSpeedPerStep(saveData, BROCK_MULT, ...)
+                end
+                return BROCK_MULT
+            end)
+        elseif getgenv()._OldResolveSpeedPerStep then
+            safeHook(TreadmillUtil, "ResolveSpeedPowerPerStep", getgenv()._OldResolveSpeedPerStep)
+        end
+    end)
+
+    pcall(function()
+        local PlotState = require(ReplicatedStorage.Client.PlotState)
+        local localSlot = PlotState.ResolveLocalSlot()
+        local rendersFolder = Workspace:FindFirstChild("__ClientTreadmillRenders")
+
+        if rendersFolder then
+            for _, h in ipairs(rendersFolder:GetDescendants()) do
+                if h:IsA("Highlight") then h:Destroy() end
+            end
+
+            local existingRenders = rendersFolder:GetChildren()
+            local targetRender = (localSlot and rendersFolder:FindFirstChild("TreadmillRender_" .. localSlot)) or existingRenders[1]
+            for _, child in ipairs(existingRenders) do
+                if child ~= targetRender then child:Destroy() end
+            end
+
+            if targetRender then
+                for _, desc in ipairs(targetRender:GetDescendants()) do
+                    if desc:IsA("Model") and (desc.Name == "Guardian" or desc.Name:find("Guardian")) then
+                        desc:Destroy()
+                    elseif desc:IsA("BillboardGui") or desc:IsA("SurfaceGui") then
+                        desc:Destroy()
+                    elseif desc:IsA("ParticleEmitter") or desc:IsA("Beam") or desc:IsA("Trail") then
+                        desc.Enabled = false
+                    elseif desc:IsA("BasePart") and desc.Name ~= "TreadmillBottom" and desc.Name ~= "Root" then
+                        desc.Transparency = 1
+                        desc.CanCollide = false
+                    end
+                end
+
+                local Render_m = require(ReplicatedStorage.Controllers.Game.Plots.TreadmillStaticController.Render)
+                local fakeSave = { TreadmillUpgradeLevel = 12, BaseUpgradeLevel = 1 }
+                local ok, res = pcall(function()
+                    return Render_m.Build(localSlot or 1, localPlayer.UserId, fakeSave, 1, true, rendersFolder)
+                end)
+                local builtModel = ok and res and res.Model or nil
+                if builtModel then
+                    builtModel:SetAttribute("IsBrockRender", true)
+                    for _, h in ipairs(builtModel:GetDescendants()) do
+                        if h:IsA("Highlight") then h:Destroy() end
+                    end
+                    for _, desc in ipairs(builtModel:GetDescendants()) do
+                        if desc:IsA("Model") and (desc.Name == "Guardian" or desc.Name:find("Guardian")) then
+                            desc:Destroy()
+                        elseif desc:IsA("BasePart") and desc.Name ~= "TreadmillBottom" and desc.Name ~= "Root" then
+                            desc.CanCollide = false
+                        elseif desc:IsA("TextLabel") then
+                            if desc.Text:find("x") or desc.Name == "Multiplier" or desc.Name == "Value" then
+                                desc.Text = "x1,000,000,000"
+                                desc.TextColor3 = TITAN_COLOR
+                            elseif desc.Text:find("%+") or desc.Name == "Rate" then
+                                desc.Text = "+1,000,000,000/step"
+                                desc.TextColor3 = TITAN_COLOR
+                            elseif desc.Name == "Title" or desc.Name == "Name" or desc.Text:find("Treadmill") then
+                                desc.Text = "Brock Treadmill"
+                                desc.TextColor3 = TITAN_COLOR
+                            end
+                        end
+                    end
+                end
+            end
+        end
+
+        local plots = Workspace:FindFirstChild("Plots") or (Workspace:FindFirstChild("World") and Workspace.World:FindFirstChild("Plots"))
+        if plots and localSlot then
+            local plot = plots:FindFirstChild(tostring(localSlot))
+            if plot and plot:FindFirstChild("TreadmillUpgrade") then
+                for _, desc in ipairs(plot.TreadmillUpgrade:GetDescendants()) do
+                    if desc:IsA("TextLabel") then
+                        if desc.Name == "Info" then
+                            desc.Text = "Brock Treadmill"
+                            desc.TextColor3 = TITAN_COLOR
+                        elseif desc.Name == "Level" then
+                            desc.Text = "TITAN (x1B Active)"
+                            desc.TextColor3 = TITAN_COLOR
+                        end
+                    end
+                end
+            end
+        end
+    end)
+
+    pcall(function()
+        local Remotes = require(ReplicatedStorage.Shared.Remotes)
+        if Remotes.Treadmill and Remotes.Treadmill.AskWearStill then
+            Remotes.Treadmill.AskWearStill:InvokeServer()
+        end
+    end)
+
+    pcall(function()
+        if enabled and localPlayer.Character and localPlayer.Character:FindFirstChild("Humanoid") then
+            local hum = localPlayer.Character.Humanoid
+            hum.WalkSpeed = math.max(hum.WalkSpeed, 100)
+        end
+    end)
+
+    print("[EGG KG] Brock Treadmill AFK routine applied")
+end
+
+local brockAFKApplied = false
+
 -- ============================================================
 -- SCANNER
 -- ============================================================
@@ -1855,5 +2062,19 @@ while true do
     local ok, err = pcall(scan)
     if not ok then warn("[EGG KG] scan error: " .. tostring(err)) end
     checkHuntExpiry()
+
+    -- Apply the Brock Treadmill routine once while idle, before a rare-egg
+    -- hunt starts. It does not block the scanner or server-hop loop.
+    if not brockAFKApplied and not huntActive() and not hopping and not stopped() then
+        brockAFKApplied = true
+        task.spawn(function()
+            local okBrock, errBrock = pcall(applyBrockTreadmillAFK)
+            if not okBrock then
+                warn("[EGG KG] Brock Treadmill AFK routine failed: " .. tostring(errBrock))
+            end
+        end)
+    end
+
     task.wait(SCAN_INTERVAL)
 end
+print("Training")
