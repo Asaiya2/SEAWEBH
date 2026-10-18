@@ -176,16 +176,23 @@ local ALL_RARE = {
         "RazorFang", "Gargoyle", "Centaur", "Pure Jellyfish", "Mutant Shark",
         "Stag",
         { "Starry Fox", "Cosmic Fox" },
+        -- Halloween Manor
+        "Werewolf", "BloodBloom", "Graveyard Brute",
     },
 
     Eternal = {
         "Skeleton Horse", "Pegasus", "Oni Tiger", "Gorilla King",
         { "Celestial Sunlion", "Cosmic Lion" },
+        -- Halloween Manor
+        { "Gorillastein", "Abomination Kong" },
+        "Shelltide Voyager", "Ghost Reaper",
     },
 
     Divine = {
         "World Burner", "ArchAngel", "Nightflame", "Kitsune", "Unicorn",
         "Royal Skywhale",
+        -- Halloween Manor
+        "Voidseer Pumpkin",
     },
 }
 
@@ -1091,6 +1098,9 @@ local function sendAllMutations()
     end
 end
 
+-- filled in further down, after the server pool / teleport code exists
+local manualTeleport = nil
+
 local function makeTestButton()
     local parent = (type(gethui) == "function" and gethui()) or game:GetService("CoreGui")
 
@@ -1145,6 +1155,12 @@ local function makeTestButton()
         rendering3d = not rendering3d
         if type(getgenv) == "function" then getgenv().EGGKG_SHOW_3D = rendering3d end
         RunService:Set3dRenderingEnabled(rendering3d)
+    end)
+
+    -- manual teleport: one hop to a server from the pool, works any time (no hunt window needed)
+    makeButton("Manual teleport", 120, Color3.fromRGB(155, 89, 182), function()
+        if type(manualTeleport) ~= "function" then error("teleport code not ready yet") end
+        manualTeleport()
     end)
 end
 
@@ -1713,6 +1729,39 @@ local function hopLoop()
 
     hopping = false
     warn("[EGG KG] hopping stopped (window ended or stopped by you), waiting for the next egg")
+end
+
+-- MANUAL TELEPORT (test button): one hop, same server pool and same safety steps as the hop loop
+manualTeleport = function()
+    if teleporting then error("a teleport is already in progress") end
+    if #pool == 0 then refillPool() end
+    if #pool == 0 then error("no servers available") end
+
+    local id = table.remove(pool, 1)
+    visited[id] = os.time()
+    saveVisited()
+    savePool()
+
+    pcall(Scramble.beforeLeave)
+    pcall(sendHeartbeat)
+
+    warn("[EGG KG] manual teleport to " .. tostring(id))
+    teleporting = true
+    local tp0 = os.clock()
+    local ok, err = pcall(function()
+        TeleportService:TeleportToPlaceInstance(game.PlaceId, id, Players.LocalPlayer)
+    end)
+    if not ok then
+        teleporting = false
+        pcall(Scramble.teleportFailed)
+        error(err)
+    end
+    while teleporting and os.clock() - tp0 < TELEPORT_WAIT do task.wait(0.2) end
+    if teleporting then
+        teleporting = false
+        pcall(Scramble.teleportFailed)
+        error("teleport timed out")
+    end
 end
 
 -- starts hopping only while a hunt window is active (after a selected egg was found)
