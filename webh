@@ -1,5 +1,10 @@
 -- ============================================================
 --  WORST • RARE EGG NOTIFIER + BOT FEED + BUTTERFLY + RACING
+--  + HALLOWEEN DIMENSION (Secret / Eternal / Divine)
+--  + HALLOWEEN PETS (Paid / Zombified re-roll pets)
+--
+--  NO SERVER HOPPING. This script only watches the server you are in
+--  and sends alerts to your webhooks.
 --
 --  Everything you normally edit is in the CONFIG half (top).
 --  Everything below the "DON'T EDIT BELOW" line is the logic.
@@ -12,7 +17,7 @@
 --    5. SETTINGS     timings, toggles, debug
 --    6. EVENTS       Butterfly Bloom + Racing options
 --    7. RARE EGGS    ONE table: tier, value, image, role per egg
---    8. EGG NAMES    game name -> board name, per zone
+--    8. EGG NAMES    board name -> game name(s), per zone
 -- ============================================================
 
 
@@ -20,8 +25,6 @@
 -- 1. WEBHOOKS
 -- Paste your webhook URLs here. Nothing else in the script has one.
 -- ============================================================
-
-
 
 local WEBHOOKS = {
     -- rare egg alerts (one channel per tier)
@@ -117,13 +120,18 @@ local S = {
     ALERT_SEND_GAP          = 0.3,   -- seconds between alerts (Discord rate limit)
     SHOW_LOCATION           = true,  -- show the zone in the alert
 
+    -- ----- Halloween Dimension -----
+    HALLOWEEN_ENABLED       = true,  -- scan Workspace.HalloweenDimension.WorldEggs
+    HALLOWEEN_SCAN_SWAMP    = true,  -- also scan Zone 2 (Haunted Swamp: BloodBloom, Shelltide Voyager)
+    HALLOWEEN_INTERVAL      = 1,     -- seconds between Halloween scans
+
     -- ----- debug -----
     DEBUG_PRINT = false,  -- print every egg's raw category / resolved name
     TEST_MODE   = false,  -- send 3 sample egg alerts + 1 butterfly alert on start
 }
 
 -- Zones expected to hold S.EGGS_PER_ZONE eggs each (used by the settle check).
--- Event zones (Angels, Demons, Dr Scramble) are intentionally NOT listed.
+-- Event zones (Angels, Demons, Dr Scramble, Halloween Dimension) are intentionally NOT listed.
 local NORMAL_ZONES = {
     "Forest", "Lake", "Desert", "Jungle", "Snow", "Volcano",
     "Abyss Ocean", "Prehistoric", "Cosmic", "Cherry Blossom", "Titan Temple",
@@ -157,10 +165,11 @@ local RACE = {
 -- ============================================================
 -- 7. RARE EGGS
 -- ONE entry per egg. To add an egg, add a line. Fields:
---   tier  = "Secret" | "Eternal" | "Divine"
---   value = "5B/s"         (optional, shows "VALUE NOT SET" if missing)
---   image = IMG("x.png")   (optional) or a full https:// link
---   role  = "role id"      (optional, pinged in addition to the tier role)
+--   tier     = "Secret" | "Eternal" | "Divine"
+--   value    = "5B/s"         (optional, shows "VALUE NOT SET" if missing)
+--   image    = IMG("x.png")   (optional) or a full https:// link
+--   role     = "role id"      (optional, pinged in addition to the tier role)
+--   siteName = "Name"         (optional, name the website uses for this egg)
 -- Keys are lowercase board names.
 -- ============================================================
 
@@ -216,12 +225,44 @@ local RARE_EGGS = {
                             image = "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQmpo9iE1MHMQNyB2lCJ6QtI4O_Stz7EvDQXu6HZ2WZTw&s",
                             role = "1558522716967936007" },
     ["starry fox"]      = { tier = "Secret", value = "750M/s", image = IMG("Starry_fox.png"),      role = "1558522767278870538" },
+
+    -- ===== HALLOWEEN DIMENSION (values = EarningRate from the game data) =====
+    -- Add  role = "..."  to any of these if you want a per-egg ping.
+    ["voidseer pumpkin"] = { tier = "Divine",  value = "14B/s",  image = "https://stealanegg.tools/images/Voidseer_Pumpkin_Pet.png" },
+
+    ["gorillastein"]     = { tier = "Eternal", value = "3.5B/s", image = "https://stealanegg.tools/images/Abomination_Kong_Pet.png",
+                             siteName = "Abomination Kong" },
+    ["shelltide voyager"] = { tier = "Eternal", value = "1.6B/s" },
+    ["ghost reaper"]     = { tier = "Eternal", value = "300M/s", image = "https://stealanegg.tools/images/Ghost_Reaper_Pet.png" },
+
+    ["werewolf"]         = { tier = "Secret",  value = "1.3B/s", image = "https://stealanegg.tools/images/Werewolf_Pet.png" },
+    ["bloodbloom"]       = { tier = "Secret",  value = "450M/s" },
+    ["graveyard brute"]  = { tier = "Secret",  value = "75M/s",  image = "https://stealanegg.tools/images/Graveyard_Brute_Pet.png" },
+
+    -- ===== HALLOWEEN PETS (Halloween Egg + Zombified re-roll) =====
+    -- No images on purpose: these send as a plain notification.
+    -- Divine
+    ["bone emperor"]            = { tier = "Divine",  value = "7.5B/s" },
+    ["zombified bone emperor"]  = { tier = "Divine",  value = "14B/s" },
+
+    -- Eternal
+    ["phantom dragon"]            = { tier = "Eternal", value = "1.5B/s" },
+    ["zombified phantom dragon"]  = { tier = "Eternal", value = "6B/s" },
+    ["zombified grave cerberus"]  = { tier = "Eternal", value = "4B/s" },
+    ["soul phantom"]              = { tier = "Eternal" },   -- rate not in game data yet
+
+    -- Secret
+    ["grave cerberus"]            = { tier = "Secret",  value = "450M/s" },
+    ["zombified tombstone bear"]  = { tier = "Secret",  value = "1.4B/s" },
+    ["zombified night fang"]      = { tier = "Secret",  value = "1.1B/s" },
+    ["zombified pumpkin fiend"]   = { tier = "Secret",  value = "800M/s" },
+    ["pumpkin golem"]             = { tier = "Secret" },    -- rate not in game data yet
 }
 
 
 -- ============================================================
 -- 8. EGG NAMES
--- game name -> board name, grouped by zone.
+-- board name -> game name(s), grouped by zone.
 -- A value can be a list when the game uses several names for one egg.
 -- ============================================================
 
@@ -304,6 +345,16 @@ local EGG_NAMES = {
         ["Enchanted Bluejay"] = "enchanted bluejay",
         ["Petal Beetle"]      = { "petal beetle", "cosmic beetle blue" },
         ["Prism Gecko"]       = "prism gecko",
+    },
+    -- Halloween Dimension (only the Secret / Eternal / Divine eggs are listed)
+    ["Halloween Dimension"] = {
+        ["Graveyard Brute"]   = "graveyard brute",
+        ["Ghost Reaper"]      = "ghost reaper",
+        ["BloodBloom"]        = "bloodbloom",
+        ["Shelltide Voyager"] = "shelltide voyager",
+        ["Werewolf"]          = { "werewolf", "dread wolf" },
+        ["Gorillastein"]      = { "gorillastein", "abomination kong" },
+        ["Voidseer Pumpkin"]  = "voidseer pumpkin",
     },
     -- Leftover guess (the Dr Scramble banner is read straight from the GUI). Safe to delete.
     ["Dr Scramble"] = {
@@ -631,13 +682,14 @@ local function sendEggEmbed(eggName, tier, location)
         timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ", now),
     }
 
+    -- no image set = no thumbnail, the alert just sends without one
     if imageUrl and imageUrl ~= "" then
         embed.thumbnail = { url = imageUrl }
     end
 
     pushSite({
         type     = "egg",
-        egg      = prettyName(eggName) .. " Egg",
+        egg      = (data.siteName or prettyName(eggName)) .. " Egg",
         rarity   = tier,
         location = location or "",
         value    = value,
@@ -1383,6 +1435,130 @@ do
     local secs = secondsUntilNextRace()
     print("[RacingWebhook] running. Next race in "
         .. (secs and (math.floor(secs / 60) .. "m " .. secs % 60 .. "s") or "?"))
+end
+
+
+-- ============================================================
+-- PART 5: HALLOWEEN DIMENSION
+-- These eggs are NOT returned by EggState.ReadFieldEggs, so they get their
+-- own scanner. It reads Workspace.HalloweenDimension.WorldEggs and sends
+-- each Secret / Eternal / Divine egg through the normal alert queue
+-- (same embed, same tier webhook, same website push).
+--
+--   Zone 1 = Graveyard        Graveyard Brute (Secret), Ghost Reaper (Eternal)
+--   Zone 2 = Haunted Swamp    BloodBloom (Secret), Shelltide Voyager (Eternal)
+--   Zone 3 = Abandoned Manor  Werewolf (Secret), Gorillastein (Eternal), Voidseer Pumpkin (Divine)
+--
+-- The Halloween Egg pets (Bone Emperor, Phantom Dragon, Zombified ...) are
+-- picked up by the normal feed scanner through RARE_EGGS, not by this one.
+-- ============================================================
+
+if S.HALLOWEEN_ENABLED then
+    task.spawn(function()
+        local ZONE_NAMES = {
+            [1] = "Halloween Dimension • Graveyard",
+            [2] = "Halloween Dimension • Haunted Swamp",
+            [3] = "Halloween Dimension • Abandoned Manor",
+        }
+
+        -- game source name (lowercase, letters/digits only) -> RARE_EGGS key
+        local SOURCES = {
+            graveyardbrute      = "graveyard brute",
+            ghostreaper         = "ghost reaper",
+            bloodbloom          = "bloodbloom",
+            shelltidevoyager    = "shelltide voyager",
+            dreadwolf           = "werewolf",
+            werewolf            = "werewolf",
+            frankensteinkongegg = "gorillastein",
+            abominationkong     = "gorillastein",
+            gorillastein        = "gorillastein",
+            voidseerpumpkin     = "voidseer pumpkin",
+        }
+
+        local function cleanKey(s)
+            return (tostring(s or ""):lower():gsub("[^%w]", ""))
+        end
+
+        local function lookupKey(k)
+            if k == "" then return nil end
+            if SOURCES[k] then return SOURCES[k] end
+            local stripped = k:gsub("egg$", "")
+            return SOURCES[stripped]
+        end
+
+        -- returns the RARE_EGGS key for this egg model, or nil if it is not a rare one
+        local function resolveEgg(m)
+            local candidates = {
+                m:GetAttribute("PreparedSourceName"),
+                m:GetAttribute("SourceName"),
+                m:GetAttribute("Category"),
+                m.Name,
+            }
+            for i = 1, 4 do
+                local key = lookupKey(cleanKey(candidates[i]))
+                if key then return key end
+            end
+            return nil
+        end
+
+        local seenH, reportedH = {}, {}   -- uid -> last seen, unidentified-egg log guard
+        local firstScan = true
+
+        while true do
+            pcall(function()
+                local dim    = workspace:FindFirstChild("HalloweenDimension")
+                local folder = dim and dim:FindFirstChild("WorldEggs")
+                if not folder then return end
+
+                local now = os.clock()
+
+                for _, m in ipairs(folder:GetChildren()) do
+                    local zone = tonumber(m:GetAttribute("Zone")) or 0
+
+                    if zone == 2 and not S.HALLOWEEN_SCAN_SWAMP then
+                        -- skipped by setting
+                    else
+                        local eggKey = resolveEgg(m)
+                        local info   = eggKey and RARE_EGGS[eggKey]
+
+                        if info then
+                            local uid = tostring(m:GetAttribute("HalloweenEggUid") or m:GetFullName())
+                            local isNew = seenH[uid] == nil
+                            seenH[uid] = now
+
+                            if isNew and (S.ALERT_EXISTING_ON_START or not firstScan) then
+                                alertQueue[#alertQueue + 1] = {
+                                    name     = eggKey,
+                                    tier     = info.tier,
+                                    location = ZONE_NAMES[zone] or "Halloween Dimension",
+                                }
+                                print("[HALLOWEEN] rare spotted:", eggKey, "(" .. info.tier .. ")", "zone", zone)
+                            end
+                        elseif S.DEBUG_PRINT then
+                            local key = m:GetFullName() .. tostring(m:GetAttribute("HalloweenEggUid"))
+                            if not reportedH[key] then
+                                reportedH[key] = true
+                                local a = {}
+                                for k, v in pairs(m:GetAttributes()) do a[#a + 1] = k .. "=" .. tostring(v) end
+                                print("[HALLOWEEN] not a rare egg, zone " .. zone .. ", attrs: " .. table.concat(a, ", "))
+                            end
+                        end
+                    end
+                end
+
+                firstScan = false
+
+                -- forget eggs that have been gone for a while
+                for uid, seenAt in pairs(seenH) do
+                    if now - seenAt > S.ALERT_FORGET_SECONDS then seenH[uid] = nil end
+                end
+            end)
+
+            task.wait(S.HALLOWEEN_INTERVAL)
+        end
+    end)
+
+    print("[EGG] Halloween Dimension scanner running")
 end
 
 print("[EGG] running!")
