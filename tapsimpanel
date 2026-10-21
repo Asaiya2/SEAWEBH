@@ -1,0 +1,762 @@
+-- Tap Simulator Reborn agent v6: status + pets + scripts from the site + TRADES from the site
+-- v5: trade cards are found by the name "TradePet_<id>" (+ PetName / PetTier attributes), the list is
+--     scrolled when it only shows ~10 cards, and every trade step is printed to the console.
+-- v6: works WHILE HATCHING. The Inventory / Trade menus are opened with click -> wait -> click again -> force,
+--     the trade window is forced on if the game hides it, the Trade menu is closed again afterwards,
+--     and every heartbeat now sends "hatches" (the site needs it to show "Hatching ..." on the Status page).
+local WORKER_URL = "https://tsr-hub.asaiyamain.workers.dev"
+local AGENT_KEY  = "worst"   -- must match the AGENT_KEY variable in Cloudflare
+local EVERY      = 30        -- seconds between heartbeats (a trade starts at the next heartbeat)
+local RESCAN     = 120       -- seconds between pet scans (opens the Inventory briefly)
+local DEBUG      = true      -- print every trade step (card counts, picks, scrolling)
+local OPEN_DELAY = 2         -- seconds to wait after the trade window opens, before choosing pets
+
+-- TRADE SAFETY (optional but recommended): list the ONLY usernames this account may ever trade with.
+-- Empty = whatever the site sends is allowed. Example: { "Thegreat_Worst", "MyAlt2" }
+local ALLOWED_PARTNERS = {}
+local MAX_OFFER = 20         -- the game's limit per trade
+
+if not game:IsLoaded() then game.Loaded:Wait() end
+
+local Players = game:GetService("Players")
+local HttpService = game:GetService("HttpService")
+local lp = Players.LocalPlayer
+local httpRequest = request or http_request or (syn and syn.request) or (http and http.request)
+if not httpRequest then error("[TSR] this executor has no http request function") end
+if type(loadstring) ~= "function" then warn("[TSR] this executor has no loadstring: scripts from the site cannot run") end
+
+local function dbg(...)
+    if not DEBUG then return end
+    local t = {}
+    for i = 1, select("#", ...) do t[i] = tostring((select(i, ...))) end
+    print("[TSR] " .. table.concat(t, " "))
+end
+
+local function walk(root, path)
+    local node = root
+    for _, name in ipairs(path) do
+        node = node and node:FindFirstChild(name)
+        if not node then return nil end
+    end
+    return node
+end
+
+local function pg() return lp:FindFirstChild("PlayerGui") end
+local function invGui() return walk(pg(), { "Tabs", "Inventory" }) end
+local function invIsOn() local g = invGui() return g ~= nil and g.Enabled == true end
+
+local function click(btn)
+    if not btn or type(getconnections) ~= "function" then return false end
+    local fired = false
+    for _, sig in ipairs({ "MouseButton1Click", "Activated", "MouseButton1Down" }) do
+        pcall(function()
+            for _, c in ipairs(getconnections(btn[sig])) do c:Fire() fired = true end
+        end)
+    end
+    return fired
+end
+
+local function waitFor(fn, timeout)
+    local t0 = os.clock()
+    while os.clock() - t0 < timeout do
+        local ok, v = pcall(fn)
+        if ok and v then return v end
+        task.wait(0.3)
+    end
+    return nil
+end
+
+-- force a ScreenGui / Frame on even if the game hides it while hatching
+local function forceOn(o, why)
+    if not o then return false end
+    local changed = false
+    if o:IsA("ScreenGui") and o.Enabled ~= true then o.Enabled = true changed = true end
+    if o:IsA("GuiObject") and o.Visible ~= true then o.Visible = true changed = true end
+    if changed then dbg("FORCED visible:", o.Name, "(" .. tostring(why) .. ")") end
+    return changed
+end
+
+-- opens Tabs.<name> even while hatching: click, wait for the game to build it, click again, then force it
+local function openMenu(name, btnPath)
+    local function gui() return walk(pg(), { "Tabs", name }) end
+    local function on() local g = gui() return g ~= nil and g.Enabled == true end
+    if on() then return true end
+    click(walk(pg(), btnPath))
+    waitFor(gui, 5)
+    if waitFor(on, 2) then return true end
+    dbg("second click on " .. name .. " (the first one did not show it)")
+    click(walk(pg(), btnPath))
+    if waitFor(on, 3) then return true end
+    dbg(name .. " still closed, forcing it open")
+    forceOn(gui(), name)
+    forceOn(walk(gui(), { "Menu" }), name .. " menu")
+    return waitFor(on, 3) ~= nil
+end
+
+-- closes Tabs.<name>: press its Close button, and if it is still on, switch it off
+local function closeMenu(name)
+    local g = walk(pg(), { "Tabs", name })
+    if not (g and g.Enabled) then return end
+    click(walk(g, { "Menu", "Close", "Button" }))
+    task.wait(0.8)
+    if g.Enabled then
+        g.Enabled = false
+        dbg("FORCED closed:", name)
+    end
+end
+
+local function cardCount()
+    local n = 0
+    local g = invGui()
+    if g then
+        for _, d in ipairs(g:GetDescendants()) do
+            if d.Name:sub(1, 4) == "Pet_" and d:GetAttribute("PetId") then n = n + 1 end
+        end
+    end
+    return n
+end
+
+local function labelText(path)
+    local l = walk(pg(), path)
+    return l and l:IsA("TextLabel") and l.Text or nil
+end
+local function parseCount(text)
+    if not text then return nil, nil end
+    local a, b = text:gsub(",", ""):match("(%d+)%s*/%s*(%d+)")
+    return tonumber(a), tonumber(b)
+end
+
+local function openInventory()
+    if invIsOn() and cardCount() > 0 then return true end
+    openMenu("Inventory", { "Game", "Bottom", "Pets", "Button" })
+    click(walk(invGui(), { "Menu", "Tabs", "Pets", "Button" }))   -- make sure the Pets tab (not Items) is showing
+    local t0 = os.clock()
+    while os.clock() - t0 < 12 do
+        task.wait(0.4)
+        if invIsOn() and cardCount() > 0 then break end
+    end
+    -- let the list finish building: wait until the card count stops changing
+    local last, stable = -1, 0
+    while stable < 3 and os.clock() - t0 < 18 do
+        task.wait(0.5)
+        local n = cardCount()
+        if n == last then stable = stable + 1 else stable, last = 0, n end
+    end
+    return invIsOn()
+end
+
+local closeLogged = false
+local function closeInventory()
+    if not invIsOn() then return end
+    -- 1) the menu's own close button
+    local close = walk(invGui(), { "Menu", "Close" })
+    if close then
+        for _, d in ipairs(close:GetDescendants()) do
+            if d:IsA("TextButton") or d:IsA("ImageButton") then click(d) break end
+        end
+    end
+    task.wait(0.8)
+    -- 2) the Pets button again (it may toggle)
+    if invIsOn() then
+        click(walk(pg(), { "Game", "Bottom", "Pets", "Button" }))
+        task.wait(0.8)
+    end
+    if invIsOn() then   -- the game ignored both clicks (busy / hatching): switch it off directly
+        invGui().Enabled = false
+    end
+    if not closeLogged then
+        closeLogged = true
+        print("[TSR] close attempt: Inventory is now " .. (invIsOn() and "STILL OPEN" or "closed"))
+    end
+end
+
+-- PetId -> { name, tier, multi }. Filled by every Inventory scan; used as a fallback to know
+-- which card in the trade window is which pet.
+local petIndex = {}
+
+local function readPets()
+    local g = invGui()
+    local list = g and walk(g, { "Menu", "Categories", "Pets", "Inner", "List" })
+    local owned, capacity = parseCount(labelText({ "Tabs", "Inventory", "Menu", "Categories", "Pets", "Stats", "Storage" }))
+    local eqNow, eqMax = parseCount(labelText({ "Tabs", "Inventory", "Menu", "Categories", "Pets", "Stats", "Equipped" }))
+
+    local seen, equipped, groups, order, scanned = {}, {}, {}, {}, 0
+    local idx = {}
+    if list then
+        for _, d in ipairs(list:GetDescendants()) do
+            local id = d:GetAttribute("PetId")
+            if id and d.Name:sub(1, 4) == "Pet_" and not seen[id] then
+                seen[id] = true
+                scanned = scanned + 1
+
+                local isEq, p = false, d.Parent
+                while p and p ~= list do
+                    if p.Name == "Equipped" then isEq = true break end
+                    p = p.Parent
+                end
+
+                local name = tostring(d:GetAttribute("PetName") or "?")
+                local tier = tostring(d:GetAttribute("PetTier") or "?")
+                if tier == "Shiny" then tier = "Rainbow" end   -- the game shows Shiny pets as RAINBOW
+                local ml = walk(d, { "Main", "Multi" })
+
+                local info = { name = name, tier = tier, multi = ml and ml.Text or nil }
+                idx[tostring(id)] = info
+                idx[d.Name:sub(5)] = info
+
+                if isEq then
+                    equipped[#equipped + 1] = { name = name, tier = tier,
+                        multi = ml and ml.Text or nil, affinity = d:GetAttribute("PetAffinity") }
+                end
+                local key = name .. "|" .. tier
+                if not groups[key] then groups[key] = { name = name, tier = tier, count = 0 } order[#order + 1] = key end
+                groups[key].count = groups[key].count + 1
+            end
+        end
+    end
+    if scanned > 0 then petIndex = idx end
+
+    local grouped = {}
+    for _, k in ipairs(order) do grouped[#grouped + 1] = groups[k] end
+    table.sort(grouped, function(a, b) return a.count > b.count end)
+
+    return { owned = owned, capacity = capacity, equippedCount = eqNow, equippedMax = eqMax,
+        scanned = scanned, stale = false, equipped = equipped, grouped = grouped }
+end
+
+local lastPets, lastScanAt = nil, 0
+local tradeBusy = false      -- true while a trade job runs (pauses Inventory scans so they don't collide)
+local function refreshPets()
+    local wasOpen = invIsOn()          -- if you opened it yourself, leave it open
+    local opened = openInventory()
+    local result = opened and readPets() or nil
+    if not wasOpen then closeInventory() end
+    if result and result.scanned > 0 then
+        lastPets, lastScanAt = result, os.clock()
+    elseif result then
+        lastPets = lastPets or result
+        lastScanAt = os.clock()
+    end
+end
+
+-- =====================================================================================
+-- TRADES
+-- =====================================================================================
+local lastTrade = nil        -- { id, stage, ok, msg, at } reported to the site in every heartbeat
+
+local function setTrade(id, stage, ok, msg)
+    lastTrade = { id = id, stage = stage, ok = ok, msg = msg, at = os.time() }
+    print("[TSR] trade " .. stage .. ": " .. msg)
+end
+
+local function norm(s) return tostring(s or ""):lower() end
+local function tierNorm(t) t = norm(t) if t == "shiny" then t = "rainbow" end return t end
+
+local function findPlayer(name)
+    for _, p in ipairs(Players:GetPlayers()) do
+        if norm(p.Name) == norm(name) then return p end
+    end
+end
+
+local function partnerAllowed(name)
+    if #ALLOWED_PARTNERS == 0 then return true end
+    for _, n in ipairs(ALLOWED_PARTNERS) do
+        if norm(n) == norm(name) then return true end
+    end
+    return false
+end
+
+-- trade window helpers (ScreenGui "Trading" > Frame "Trading" > Build / Review)
+local function winGui() return walk(pg(), { "Trading" }) end
+local function winOpen()
+    local g = winGui()
+    local f = g and g:FindFirstChild("Trading")
+    return g ~= nil and g.Enabled == true and f ~= nil and f.Visible == true
+end
+local function build() return walk(pg(), { "Trading", "Trading", "Build" }) end
+local function buildOpen() local b = build() return winOpen() and b ~= nil and b.Visible == true end
+local function reviewOpen()
+    local r = walk(pg(), { "Trading", "Trading", "Review" })
+    return winOpen() and r ~= nil and r.Visible == true
+end
+
+-- If the game hides the trade window while hatching, force it on once this player's name shows in it.
+-- It stops as soon as the window is open, so the game can close it normally when the trade ends.
+local function startWindowForce(player, seconds)
+    if not player then return end
+    task.spawn(function()
+        local t0 = os.clock()
+        while os.clock() - t0 < (seconds or 120) do
+            local b = build()
+            local nm = b and walk(b, { "Table", "Them", "Name" })
+            if nm and nm:IsA("TextLabel") and nm.Text ~= "" then
+                local t = norm(nm.Text)
+                if t:find(norm(player.Name), 1, true) or t:find(norm(player.DisplayName), 1, true) then
+                    local g = winGui()
+                    forceOn(g, "trading gui")
+                    forceOn(g and g:FindFirstChild("Trading"), "trading frame")
+                    forceOn(b, "build")
+                    if buildOpen() then return end
+                end
+            end
+            task.wait(0.3)
+        end
+    end)
+end
+
+local function countItems(list)
+    local n = 0
+    if list then
+        for _, c in ipairs(list:GetChildren()) do
+            if c:IsA("GuiObject") and c.Visible then n = n + 1 end
+        end
+    end
+    return n
+end
+local function offerCount(b)   -- the "n/20" counter on your side; falls back to counting cards
+    local l = walk(b, { "Table", "You", "Count", "Label" })
+    if l and l:IsA("TextLabel") then
+        local a = l.Text:gsub(",", ""):match("(%d+)%s*/%s*%d+")
+        if a then return tonumber(a) end
+    end
+    return countItems(walk(b, { "Table", "You", "List" }))
+end
+local function themCount(b) return countItems(walk(b, { "Table", "Them", "List" })) end
+
+local function themIs(b, player)   -- is the other side of the table really this player?
+    local l = walk(b, { "Table", "Them", "Name" })
+    if not (l and l:IsA("TextLabel")) then return false end
+    local t = norm(l.Text)
+    return t:find(norm(player.Name), 1, true) ~= nil or t:find(norm(player.DisplayName), 1, true) ~= nil
+end
+
+local function cancelTrade()
+    local b = build()
+    if winOpen() and b then click(walk(b, { "Actions", "Cancel", "Button" })) end
+end
+
+local function dumpReview()
+    local r = walk(pg(), { "Trading", "Trading", "Review" })
+    if not r then return end
+    local out = {}
+    for _, d in ipairs(r:GetDescendants()) do
+        if d:IsA("TextLabel") and d.Visible and d.Text ~= "" then out[#out + 1] = d.Text end
+    end
+    print("[TSR] review screen texts: " .. table.concat(out, " | "))
+end
+
+-- ---- cards in the trade window's pet list ----
+-- They are Frames named "TradePet_<id>" and carry PetName / PetTier attributes (Shiny = Rainbow).
+local function isTradeCard(d)
+    return d:IsA("Frame") and (d.Name:sub(1, 9) == "TradePet_" or d:GetAttribute("PetName") ~= nil)
+end
+local function cardId(c)
+    local id = c:GetAttribute("PetId")
+    if id ~= nil then return tostring(id) end
+    if c.Name:sub(1, 9) == "TradePet_" then return c.Name:sub(10) end
+    return c.Name
+end
+local function cardMeta(c)
+    local n, t = c:GetAttribute("PetName"), c:GetAttribute("PetTier")
+    if n then return tostring(n), tostring(t or "?") end
+    local m = petIndex[cardId(c)]   -- fallback: the Inventory scan
+    if m then return m.name, m.tier end
+end
+local function cardUsable(c)
+    for _, nm in ipairs({ "Lock", "Trading", "Bank" }) do   -- locked / already offered / banked
+        local x = c:FindFirstChild(nm)
+        if x and x:IsA("GuiObject") and x.Visible then return false end
+    end
+    return true
+end
+local function tradeList(b) return walk(b, { "Inventory", "List" }) end
+local function tradeCards(b)
+    local out, list = {}, tradeList(b)
+    if list then
+        for _, d in ipairs(list:GetChildren()) do
+            if isTradeCard(d) then out[#out + 1] = d end
+        end
+    end
+    return out
+end
+local function ruleMatches(rule, name, tier)
+    if rule.name and rule.name ~= "" and norm(rule.name) ~= norm(name) then return false end
+    if rule.tier and rule.tier ~= "" and tierNorm(rule.tier) ~= tierNorm(tier) then return false end
+    return true
+end
+
+-- the list only builds about 10 cards at a time, so scroll it to reveal the rest
+local function scrollList(b, dir)   -- dir "top" or "down"; returns true if it moved
+    local list = tradeList(b)
+    if not (list and list:IsA("ScrollingFrame")) then return false end
+    local maxY = list.AbsoluteCanvasSize.Y - list.AbsoluteWindowSize.Y
+    local y = list.CanvasPosition.Y
+    local ny = dir == "top" and 0 or math.min(maxY, y + list.AbsoluteWindowSize.Y * 0.7)
+    if math.abs(ny - y) < 1 then return false end
+    list.CanvasPosition = Vector2.new(0, ny)
+    task.wait(0.5)
+    return true
+end
+
+local function waitCardsStable(b)
+    local last, stable, t0 = -1, 0, os.clock()
+    while stable < 3 and os.clock() - t0 < 8 do
+        task.wait(0.5)
+        local n = #tradeCards(b)
+        dbg("  pet cards in the trade list:", n)
+        if n == last then stable = stable + 1 else stable, last = 0, n end
+    end
+end
+
+-- click ONE usable card that matches the rule; true if the offer counter went up
+local function pickOne(b, rule, picked)
+    for _, c in ipairs(tradeCards(b)) do
+        local id = cardId(c)
+        if not picked[id] and cardUsable(c) then
+            local name, tier = cardMeta(c)
+            if name and ruleMatches(rule, name, tier) then
+                local btn = walk(c, { "Main", "Button" }) or c:FindFirstChildWhichIsA("GuiButton", true)
+                local before = offerCount(b)
+                local fired = click(btn)
+                local grew = waitFor(function() return offerCount(b) > before end, 3)
+                dbg("  click", name, "(" .. tostring(tier) .. ") fired=" .. tostring(fired), "offer grew=" .. tostring(grew ~= nil), "now", offerCount(b))
+                if grew then
+                    picked[id] = true
+                    task.wait(0.25)
+                    return true
+                end
+            end
+        end
+    end
+    return false
+end
+
+local function selectPets(b, rules)
+    local picked = {}
+    for _, rule in ipairs(rules) do
+        local got, loops = 0, 0
+        dbg("choosing", rule.count, "x", rule.tier or "", rule.name or "any pet")
+        scrollList(b, "top")
+        while got < rule.count and loops < 300 do
+            loops = loops + 1
+            if pickOne(b, rule, picked) then
+                got = got + 1
+            elseif not scrollList(b, "down") then
+                break   -- bottom of the list reached and nothing more matches
+            else
+                dbg("  scrolled the list, cards now:", #tradeCards(b))
+            end
+        end
+        if got < rule.count then
+            return false, "found only " .. got .. " of " .. rule.count .. " " .. (rule.tier or "") .. " " .. (rule.name or "any pet")
+        end
+    end
+    return true
+end
+
+local function sanitize(trade)   -- whatever the site sent: check it again before touching anything
+    local partner = tostring(trade.partner or "")
+    if not partner:match("^[%w_]+$") then return nil, "bad partner name" end
+    local rules, total = {}, 0
+    for _, p in ipairs(type(trade.pets) == "table" and trade.pets or {}) do
+        local c = math.floor(tonumber(p.count) or 0)
+        if c >= 1 then
+            rules[#rules + 1] = { name = tostring(p.name or ""), tier = tostring(p.tier or ""), count = c }
+            total = total + c
+        end
+    end
+    local delay = math.clamp(tonumber(trade.readyDelay) or 6, 1, 60)
+    return { partner = partner, rules = rules, total = total, delay = delay, expect = tonumber(trade.expect) or total }
+end
+
+local function runGive(cmd)
+    local id = cmd.id
+    local t, err = sanitize(cmd.trade)
+    if not t then return setTrade(id, "failed", false, err) end
+    if t.total < 1 or t.total > MAX_OFFER then return setTrade(id, "failed", false, "pet count must be 1-" .. MAX_OFFER) end
+    if not partnerAllowed(t.partner) then return setTrade(id, "failed", false, t.partner .. " is not in ALLOWED_PARTNERS") end
+    local target = findPlayer(t.partner)
+    if not target then return setTrade(id, "failed", false, t.partner .. " is not in this server") end
+
+    setTrade(id, "scanning", true, "scanning inventory")
+    pcall(refreshPets)
+    if next(petIndex) == nil then return setTrade(id, "failed", false, "inventory scan found no pets") end
+
+    -- 1) open the Trade menu (also while hatching) and send the request
+    if not openMenu("Trade", { "Game", "LeftButtons", "Trade", "Button" }) then
+        return setTrade(id, "failed", false, "trade menu did not open")
+    end
+    local row = waitFor(function()
+        return walk(pg(), { "Tabs", "Trade", "Menu", "Inner", "Trade", "Player_" .. target.UserId })
+    end, 8)
+    if not row then return setTrade(id, "failed", false, t.partner .. " is not in the trade list (their trade setting?)") end
+    if not click(walk(row, { "SendRequestButton", "Button" })) then
+        return setTrade(id, "failed", false, "could not press Trade")
+    end
+    setTrade(id, "requested", true, "request sent to " .. t.partner .. ", waiting for them to accept")
+    startWindowForce(target, 120)
+
+    -- 2) wait for the trade window
+    if not waitFor(buildOpen, 90) then
+        return setTrade(id, "failed", false, t.partner .. " did not accept in 90 seconds")
+    end
+    dbg("trade window opened, waiting " .. OPEN_DELAY .. "s before choosing pets")
+    task.wait(OPEN_DELAY)
+    local b = build()
+    if not b or not buildOpen() then return setTrade(id, "failed", false, "the trade window closed right after opening") end
+    if not themIs(b, target) then
+        cancelTrade()
+        return setTrade(id, "failed", false, "the other side is not " .. t.partner .. ", cancelled")
+    end
+
+    closeMenu("Trade")   -- the player-list menu is not needed any more once the trade window is open
+
+    -- 3) put the pets in
+    setTrade(id, "selecting", true, "choosing pets")
+    waitCardsStable(b)
+    local ok, why = selectPets(b, t.rules)
+    if not ok then cancelTrade() return setTrade(id, "failed", false, why .. ", cancelled") end
+    if offerCount(b) ~= t.total then
+        cancelTrade()
+        return setTrade(id, "failed", false, "offer shows " .. offerCount(b) .. " but expected " .. t.total .. ", cancelled")
+    end
+
+    -- 4) wait, re-check, press Ready
+    setTrade(id, "waiting", true, "offer ready, pressing Ready in " .. t.delay .. "s")
+    task.wait(t.delay)
+    if not buildOpen() or offerCount(build()) ~= t.total or not themIs(build(), target) then
+        cancelTrade()
+        return setTrade(id, "failed", false, "offer changed before Ready, cancelled")
+    end
+    click(walk(build(), { "Actions", "Ready", "Button" }))
+    setTrade(id, "ready", true, "pressed Ready, waiting for the other side")
+
+    -- 5) what happens after Ready
+    waitFor(function() return reviewOpen() or not winOpen() end, 45)
+    if reviewOpen() then
+        dumpReview()
+        waitFor(function() return not winOpen() end, 60)
+    end
+    closeMenu("Trade")
+    if winOpen() then
+        setTrade(id, "stuck", false, "still open after Ready (see the Review screen output in the console)")
+    else
+        setTrade(id, "done", true, "trade window closed (completed or cancelled by the other side)")
+    end
+end
+
+local function runReceive(cmd)
+    local id = cmd.id
+    local t, err = sanitize(cmd.trade)   -- here "partner" is the SENDER we are allowed to accept from
+    if not t then return setTrade(id, "failed", false, err) end
+    if not partnerAllowed(t.partner) then return setTrade(id, "failed", false, t.partner .. " is not in ALLOWED_PARTNERS") end
+    if t.expect < 1 or t.expect > MAX_OFFER then return setTrade(id, "failed", false, "bad expected pet count") end
+    setTrade(id, "waiting", true, "waiting for a trade request from " .. t.partner)
+    startWindowForce(findPlayer(t.partner), 200)
+
+    -- 1) accept the request, but only from that player
+    local accepted = waitFor(function()
+        if buildOpen() then return "open" end
+        local q = walk(pg(), { "Tabs", "TradeQuest" })
+        if q and q.Enabled then
+            local from = findPlayer(t.partner)
+            local l = walk(q, { "Menu", "PlayerSent" })
+            local txt = l and norm(l.Text) or ""
+            if from and (txt:find(norm(from.Name), 1, true) or txt:find(norm(from.DisplayName), 1, true)) then
+                click(walk(q, { "Menu", "Accept", "Button" }))
+                task.wait(1)
+            end
+        end
+        return false
+    end, 180)
+    if not accepted then return setTrade(id, "failed", false, "no request from " .. t.partner .. " in 3 minutes") end
+
+    -- 2) wait until the offer is exactly what we expect
+    if not waitFor(buildOpen, 20) then return setTrade(id, "failed", false, "trade window did not open") end
+    local sender = findPlayer(t.partner)
+    if not sender or not themIs(build(), sender) then
+        cancelTrade()
+        return setTrade(id, "failed", false, "the other side is not " .. t.partner .. ", cancelled")
+    end
+    setTrade(id, "checking", true, "waiting for " .. t.expect .. " pets in the offer")
+    if not waitFor(function() return themCount(build()) == t.expect end, 120) then
+        cancelTrade()
+        return setTrade(id, "failed", false, "offer never reached " .. t.expect .. " pets (it shows " .. themCount(build()) .. "), cancelled")
+    end
+
+    -- 3) wait, re-check, press Ready
+    task.wait(t.delay)
+    if not buildOpen() or themCount(build()) ~= t.expect or not themIs(build(), sender) then
+        cancelTrade()
+        return setTrade(id, "failed", false, "offer changed before Ready, cancelled")
+    end
+    click(walk(build(), { "Actions", "Ready", "Button" }))
+    setTrade(id, "ready", true, "pressed Ready")
+
+    waitFor(function() return reviewOpen() or not winOpen() end, 45)
+    if reviewOpen() then
+        dumpReview()
+        waitFor(function() return not winOpen() end, 60)
+    end
+    closeMenu("Trade")
+    if winOpen() then
+        setTrade(id, "stuck", false, "still open after Ready (see the Review screen output in the console)")
+    else
+        setTrade(id, "done", true, "trade window closed (completed or cancelled by the other side)")
+    end
+end
+
+local function handleTrade(cmd)
+    if tradeBusy then return setTrade(cmd.id, "rejected", false, "another trade job is still running") end
+    tradeBusy = true
+    local ok, e = pcall(function()
+        local role = cmd.trade and cmd.trade.role
+        if role == "give" then runGive(cmd)
+        elseif role == "receive" then runReceive(cmd)
+        else setTrade(cmd.id, "failed", false, "unknown trade role") end
+    end)
+    if not ok then
+        pcall(cancelTrade)
+        setTrade(cmd.id, "failed", false, "error: " .. tostring(e))
+    end
+    tradeBusy = false
+    lastScanAt = 0   -- rescan soon so the site shows the new inventory
+end
+
+-- =====================================================================================
+
+-- =====================================================================================
+-- HATCHES: the total eggs opened. The Worker compares it between two heartbeats: changed = "Hatching ..."
+-- =====================================================================================
+local HATCHES_PATH = nil   -- optional: path to the TextLabel that shows your eggs opened, e.g. { "SomeGui", "Frame", "Eggs" }
+local hatchSrc, hatchWarned = nil, false
+
+local function numFromText(t)
+    local digits = tostring(t or ""):gsub(",", ""):match("^%s*(%d+)%s*$")
+    return digits and tonumber(digits) or nil
+end
+
+local function readHatches()
+    -- 0) a path you set yourself
+    if HATCHES_PATH then
+        local l = walk(pg(), HATCHES_PATH)
+        local v = l and l:IsA("TextLabel") and numFromText(l.Text)
+        if v then hatchSrc = "HATCHES_PATH" return v end
+    end
+    -- 1) leaderstats values and attributes on the player
+    local ls = lp:FindFirstChild("leaderstats")
+    for _, v in ipairs(ls and ls:GetChildren() or {}) do
+        local n = v.Name:lower()
+        if (n:find("egg") or n:find("hatch")) and v:IsA("ValueBase") and tonumber(v.Value) then
+            hatchSrc = "leaderstats." .. v.Name
+            return tonumber(v.Value)
+        end
+    end
+    for k, v in pairs(lp:GetAttributes()) do
+        local n = tostring(k):lower()
+        if (n:find("egg") or n:find("hatch")) and type(v) == "number" then
+            hatchSrc = "attribute " .. tostring(k)
+            return v
+        end
+    end
+    -- 2) the on-screen player list: find this player's row and read its plain number (e.g. 207,485)
+    local plist = pg() and pg():FindFirstChild("PlayerList")
+    if plist then
+        local me1, me2 = norm(lp.Name), norm(lp.DisplayName)
+        for _, d in ipairs(plist:GetDescendants()) do
+            if d:IsA("TextLabel") then
+                local t = norm(d.Text)
+                if t == me1 or t == me2 or t == "@" .. me1 then
+                    local row = d.Parent
+                    for _ = 1, 4 do
+                        if not row or row == plist then break end
+                        for _, x in ipairs(row:GetDescendants()) do
+                            if x:IsA("TextLabel") and x ~= d then
+                                local v = numFromText(x.Text)
+                                if v then hatchSrc = "PlayerList row" return v end
+                            end
+                        end
+                        row = row.Parent
+                    end
+                end
+            end
+        end
+    end
+    return nil
+end
+
+local okCount = 0
+
+-- Scripts and trades sent from the site arrive in the heartbeat reply. Each one runs once.
+local doneCmds = {}
+local function runCommands(body)
+    local okd, data = pcall(function() return HttpService:JSONDecode(body) end)
+    if not okd or type(data) ~= "table" or type(data.commands) ~= "table" then return end
+    for _, c in ipairs(data.commands) do
+        if type(c) == "table" and c.id and not doneCmds[c.id] then
+            doneCmds[c.id] = true
+            if c.type == "trade" and type(c.trade) == "table" then
+                task.spawn(handleTrade, c)
+            else
+                task.spawn(function()
+                    local label = tostring(c.name or "script")
+                    local f, err = loadstring(tostring(c.code or ""))
+                    if not f then warn("[TSR] script \"" .. label .. "\" has an error: " .. tostring(err)) return end
+                    print("[TSR] running script: " .. label)
+                    local okr, e2 = pcall(f)
+                    if not okr then warn("[TSR] script \"" .. label .. "\" crashed: " .. tostring(e2)) end
+                end)
+            end
+        end
+    end
+end
+local function heartbeat()
+    if not tradeBusy and os.clock() - lastScanAt >= RESCAN then pcall(refreshPets) end
+
+    local pets = lastPets or { scanned = 0, equipped = {}, grouped = {} }
+    -- counters can be read without opening anything when the labels exist
+    local owned, capacity = parseCount(labelText({ "Tabs", "Inventory", "Menu", "Categories", "Pets", "Stats", "Storage" }))
+    if owned then pets.owned, pets.capacity = owned, capacity end
+    pets.stale = (os.clock() - lastScanAt) > RESCAN * 2
+
+    local okh, hatches = pcall(readHatches)
+    if not okh then hatches = nil end
+    if hatches == nil and not hatchWarned then
+        hatchWarned = true
+        warn("[TSR] could not find your eggs-opened number, so the site will never show \"Hatching\". Set HATCHES_PATH.")
+    elseif hatches ~= nil and hatchSrc then
+        dbg("hatches =", hatches, "(from " .. hatchSrc .. ")")
+        hatchSrc = nil
+    end
+
+    local ok, res = pcall(httpRequest, {
+        Url = WORKER_URL .. "/agent/heartbeat", Method = "POST",
+        Headers = { ["Content-Type"] = "application/json", ["x-key"] = AGENT_KEY },
+        Body = HttpService:JSONEncode({
+            name = lp.Name, userId = lp.UserId, game = "Tap Simulator Reborn",
+            state = "online", placeId = game.PlaceId, jobId = game.JobId, pets = pets, hatches = hatches,
+            lastTrade = lastTrade,
+        }),
+    })
+    local code = ok and type(res) == "table" and tonumber(res.StatusCode) or nil
+    if code == 200 then
+        okCount = okCount + 1
+        print(string.format("[TSR] heartbeat OK #%d (owned %s, scanned %d)", okCount, tostring(pets.owned), pets.scanned or 0))
+        if type(res.Body) == "string" then runCommands(res.Body) end
+    elseif code == 401 then
+        warn("[TSR] 401: the AGENT_KEY in this script does not match the one in Cloudflare")
+    else
+        warn("[TSR] heartbeat failed: " .. tostring(code or res))
+    end
+end
+
+if type(getgenv) == "function" then getgenv().TSR_AGENT_RUN = (getgenv().TSR_AGENT_RUN or 0) + 1 end
+local myRun = type(getgenv) == "function" and getgenv().TSR_AGENT_RUN or 0
+
+task.spawn(function()
+    while (type(getgenv) ~= "function") or getgenv().TSR_AGENT_RUN == myRun do
+        local ok, err = pcall(heartbeat)
+        if not ok then warn("[TSR] error: " .. tostring(err)) end
+        task.wait(EVERY)
+    end
+end)
