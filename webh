@@ -1,3 +1,4 @@
+-- WORST Server Notifiers
 -- ============================================================
 --  WORST • RARE EGG NOTIFIER + BOT FEED + BUTTERFLY + RACING
 --  + HALLOWEEN DIMENSION (Secret / Eternal / Divine)
@@ -228,15 +229,19 @@ local RARE_EGGS = {
 
     -- ===== HALLOWEEN DIMENSION (values = EarningRate from the game data) =====
     -- Add  role = "..."  to any of these if you want a per-egg ping.
-    ["voidseer pumpkin"] = { tier = "Divine",  value = "14B/s",  image = "https://stealanegg.tools/images/Voidseer_Pumpkin_Pet.png" },
+    ["voidseer pumpkin"] = { tier = "Divine",  value = "14B/s",  image = "https://stealanegg.tools/images/Voidseer_Pumpkin_Pet.png",
+                             role = "1562469998843134054" },
 
     ["gorillastein"]     = { tier = "Eternal", value = "3.5B/s", image = "https://stealanegg.tools/images/Abomination_Kong_Pet.png",
-                             siteName = "Abomination Kong" },
-    ["shelltide voyager"] = { tier = "Eternal", value = "1.6B/s" },
-    ["ghost reaper"]     = { tier = "Eternal", value = "300M/s", image = "https://stealanegg.tools/images/Ghost_Reaper_Pet.png" },
+                             siteName = "Abomination Kong",
+                             role = "1562470049279778856" },
+    ["shelltide voyager"] = { tier = "Eternal", value = "1.6B/s", role = "1562470111871238225" },
+    ["ghost reaper"]     = { tier = "Eternal", value = "300M/s", image = "https://stealanegg.tools/images/Ghost_Reaper_Pet.png",
+                             role = "1562470185770680390" },
 
-    ["werewolf"]         = { tier = "Secret",  value = "1.3B/s", image = "https://stealanegg.tools/images/Werewolf_Pet.png" },
-    ["bloodbloom"]       = { tier = "Secret",  value = "450M/s" },
+    ["werewolf"]         = { tier = "Secret",  value = "1.3B/s", image = "https://stealanegg.tools/images/Werewolf_Pet.png",
+                             role = "1562470249691877456" },   -- Dreadwolf
+    ["bloodbloom"]       = { tier = "Secret",  value = "450M/s", role = "1562470275373858928" },   -- BloomBloom
     ["graveyard brute"]  = { tier = "Secret",  value = "75M/s",  image = "https://stealanegg.tools/images/Graveyard_Brute_Pet.png" },
 
     -- ===== HALLOWEEN PETS (Halloween Egg + Zombified re-roll) =====
