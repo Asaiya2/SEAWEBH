@@ -1,15 +1,18 @@
--- Tap Simulator Reborn agent v7: status + pets + scripts from the site + TRADES from the site + AUTO-UNLOCK
+-- Tap Simulator Reborn agent v8: status + pets + scripts from the site + TRADES from the site + AUTO-UNLOCK
 -- v5: trade cards are found by the name "TradePet_<id>" (+ PetName / PetTier attributes), the list is
 --     scrolled when it only shows ~10 cards, and every trade step is printed to the console.
 -- v6: works WHILE HATCHING. The Inventory / Trade menus are opened with click -> wait -> click again -> force,
 --     the trade window is forced on if the game hides it, the Trade menu is closed again afterwards,
 --     and every heartbeat now sends "hatches" (the site needs it to show "Hatching ..." on the Status page).
+-- v8: MULTI TRADE support: "abort" command from the site, faster check-ins (5 s) while a multi trade runs,
+--     and STACKED pets ("x2") work in trades (a stacked card is clicked once per pet; the offer's stacks are counted).
 -- v7: AUTO-UNLOCK. Locked pets can't be traded, and the game locks some pets automatically (secrets...).
 --     Every Inventory scan (and every 3s while the Inventory is open) unlocks every locked pet.
 --     A pet that is locked again later is unlocked again (UNLOCK_SKIP protects names you want to stay locked).
 local WORKER_URL = "https://tsr-hub.asaiyamain.workers.dev"
 local AGENT_KEY  = "worst"   -- must match the AGENT_KEY variable in Cloudflare
 local EVERY      = 30        -- seconds between heartbeats (a trade starts at the next heartbeat)
+local EVERY_FAST = 5         -- the site asks for this while a multi trade is running
 local RESCAN     = 120       -- seconds between pet scans (opens the Inventory briefly)
 local DEBUG      = true      -- print every trade step (card counts, picks, scrolling)
 local OPEN_DELAY = 2         -- seconds to wait after the trade window opens, before choosing pets
@@ -124,6 +127,17 @@ local function cardCount()
         end
     end
     return n
+end
+
+-- identical pets are drawn as ONE card with a "x2" / "x4" StackCount label; 1 when there is none
+local function stackOf(card)
+    local sc = card:FindFirstChild("StackCount")
+    if sc and sc:IsA("GuiObject") and sc.Visible then
+        local lb = sc:FindFirstChild("Label")
+        local num = lb and lb:IsA("TextLabel") and lb.Text:gsub(",", ""):match("%d+")
+        return tonumber(num) or 1
+    end
+    return 1
 end
 
 local function labelText(path)
@@ -343,6 +357,8 @@ end
 -- TRADES
 -- =====================================================================================
 local lastTrade = nil        -- { id, stage, ok, msg, at } reported to the site in every heartbeat
+local abortRequested = false -- set by an "abort" command from the site (multi trade: the partner failed / job cancelled)
+local everyNow = EVERY       -- 30 s normally, 5 s while the site runs a multi trade
 
 local function setTrade(id, stage, ok, msg)
     lastTrade = { id = id, stage = stage, ok = ok, msg = msg, at = os.time() }
@@ -408,7 +424,7 @@ local function countItems(list)
     local n = 0
     if list then
         for _, c in ipairs(list:GetChildren()) do
-            if c:IsA("GuiObject") and c.Visible then n = n + 1 end
+            if c:IsA("GuiObject") and c.Visible then n = n + stackOf(c) end
         end
     end
     return n
@@ -508,27 +524,34 @@ local function waitCardsStable(b)
     end
 end
 
--- click ONE usable card that matches the rule; true if the offer counter went up
-local function pickOne(b, rule, picked)
+-- Click ONE usable card that matches the rule and return how many pets it added (0 = none).
+-- A stacked card ("x2") holds several pets and each click adds one, so the same card is clicked again,
+-- but never more times than its stack size (a second click on a single pet could take it back out).
+local function pickOne(b, rule, picked, room)
     for _, c in ipairs(tradeCards(b)) do
         local id = cardId(c)
         if not picked[id] and cardUsable(c) then
             local name, tier = cardMeta(c)
             if name and ruleMatches(rule, name, tier) then
                 local btn = walk(c, { "Main", "Button" }) or c:FindFirstChildWhichIsA("GuiButton", true)
-                local before = offerCount(b)
-                local fired = click(btn)
-                local grew = waitFor(function() return offerCount(b) > before end, 3)
-                dbg("  click", name, "(" .. tostring(tier) .. ") fired=" .. tostring(fired), "offer grew=" .. tostring(grew ~= nil), "now", offerCount(b))
-                if grew then
-                    picked[id] = true
+                local stack = stackOf(c)
+                local added = 0
+                while added < stack and added < room and c.Parent do
+                    local before = offerCount(b)
+                    local fired = click(btn)
+                    local grew = waitFor(function() return offerCount(b) > before end, 3)
+                    local delta = grew and (offerCount(b) - before) or 0
+                    dbg("  click", name, "(" .. tostring(tier) .. ") stack=" .. stack, "fired=" .. tostring(fired), "offer +" .. delta, "now", offerCount(b))
+                    if delta <= 0 then break end
+                    added = added + delta
                     task.wait(0.25)
-                    return true
                 end
+                picked[id] = true   -- this card is used up (or could not be clicked)
+                if added > 0 then return added end
             end
         end
     end
-    return false
+    return 0
 end
 
 local function selectPets(b, rules)
@@ -539,13 +562,17 @@ local function selectPets(b, rules)
         scrollList(b, "top")
         while got < rule.count and loops < 300 do
             loops = loops + 1
-            if pickOne(b, rule, picked) then
-                got = got + 1
+            local n = pickOne(b, rule, picked, rule.count - got)
+            if n > 0 then
+                got = got + n
             elseif not scrollList(b, "down") then
                 break   -- bottom of the list reached and nothing more matches
             else
                 dbg("  scrolled the list, cards now:", #tradeCards(b))
             end
+        end
+        if got > rule.count then
+            return false, "a click added more pets than asked (" .. got .. " instead of " .. rule.count .. ")"
         end
         if got < rule.count then
             return false, "found only " .. got .. " of " .. rule.count .. " " .. (rule.tier or "") .. " " .. (rule.name or "any pet")
@@ -597,7 +624,9 @@ local function runGive(cmd)
     startWindowForce(target, 120)
 
     -- 2) wait for the trade window
-    if not waitFor(buildOpen, 90) then
+    local opened = waitFor(function() return buildOpen() or abortRequested end, 90)
+    if abortRequested then cancelTrade() return setTrade(id, "failed", false, "stopped by the site") end
+    if not opened then
         return setTrade(id, "failed", false, t.partner .. " did not accept in 90 seconds")
     end
     dbg("trade window opened, waiting " .. OPEN_DELAY .. "s before choosing pets")
@@ -656,6 +685,7 @@ local function runReceive(cmd)
 
     -- 1) accept the request, but only from that player
     local accepted = waitFor(function()
+        if abortRequested then return "abort" end
         if buildOpen() then return "open" end
         local q = walk(pg(), { "Tabs", "TradeQuest" })
         if q and q.Enabled then
@@ -669,6 +699,7 @@ local function runReceive(cmd)
         end
         return false
     end, 180)
+    if accepted == "abort" then cancelTrade() return setTrade(id, "failed", false, "stopped by the site") end
     if not accepted then return setTrade(id, "failed", false, "no request from " .. t.partner .. " in 3 minutes") end
 
     -- 2) wait until the offer is exactly what we expect
@@ -679,8 +710,9 @@ local function runReceive(cmd)
         return setTrade(id, "failed", false, "the other side is not " .. t.partner .. ", cancelled")
     end
     setTrade(id, "checking", true, "waiting for " .. t.expect .. " pets in the offer")
-    if not waitFor(function() return themCount(build()) == t.expect end, 120) then
+    if not waitFor(function() return themCount(build()) == t.expect or abortRequested end, 120) or abortRequested then
         cancelTrade()
+        if abortRequested then return setTrade(id, "failed", false, "stopped by the site") end
         return setTrade(id, "failed", false, "offer never reached " .. t.expect .. " pets (it shows " .. themCount(build()) .. "), cancelled")
     end
 
@@ -709,6 +741,7 @@ end
 local function handleTrade(cmd)
     if tradeBusy then return setTrade(cmd.id, "rejected", false, "another trade job is still running") end
     tradeBusy = true
+    abortRequested = false
     local ok, e = pcall(function()
         local role = cmd.trade and cmd.trade.role
         if role == "give" then runGive(cmd)
@@ -791,11 +824,17 @@ local okCount = 0
 local doneCmds = {}
 local function runCommands(body)
     local okd, data = pcall(function() return HttpService:JSONDecode(body) end)
-    if not okd or type(data) ~= "table" or type(data.commands) ~= "table" then return end
+    if not okd or type(data) ~= "table" then return end
+    everyNow = data.fast and EVERY_FAST or EVERY
+    if type(data.commands) ~= "table" then return end
     for _, c in ipairs(data.commands) do
         if type(c) == "table" and c.id and not doneCmds[c.id] then
             doneCmds[c.id] = true
-            if c.type == "trade" and type(c.trade) == "table" then
+            if c.type == "trade" and type(c.trade) == "table" and c.trade.role == "abort" then
+                abortRequested = true   -- stops a running trade job at its next wait, and closes the window if it is open
+                if tradeBusy then pcall(cancelTrade) end
+                print("[TSR] stop requested by the site")
+            elseif c.type == "trade" and type(c.trade) == "table" then
                 task.spawn(handleTrade, c)
             else
                 task.spawn(function()
@@ -857,7 +896,7 @@ task.spawn(function()
     while (type(getgenv) ~= "function") or getgenv().TSR_AGENT_RUN == myRun do
         local ok, err = pcall(heartbeat)
         if not ok then warn("[TSR] error: " .. tostring(err)) end
-        task.wait(EVERY)
+        task.wait(everyNow)
     end
 end)
 
