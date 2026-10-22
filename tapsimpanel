@@ -1,15 +1,25 @@
--- Tap Simulator Reborn agent v6: status + pets + scripts from the site + TRADES from the site
+-- Tap Simulator Reborn agent v7: status + pets + scripts from the site + TRADES from the site + AUTO-UNLOCK
 -- v5: trade cards are found by the name "TradePet_<id>" (+ PetName / PetTier attributes), the list is
 --     scrolled when it only shows ~10 cards, and every trade step is printed to the console.
 -- v6: works WHILE HATCHING. The Inventory / Trade menus are opened with click -> wait -> click again -> force,
 --     the trade window is forced on if the game hides it, the Trade menu is closed again afterwards,
 --     and every heartbeat now sends "hatches" (the site needs it to show "Hatching ..." on the Status page).
+-- v7: AUTO-UNLOCK. Locked pets can't be traded, and the game locks some pets automatically (secrets...).
+--     Every Inventory scan (and every 3s while the Inventory is open) unlocks every locked pet.
+--     A pet that is locked again later is unlocked again (UNLOCK_SKIP protects names you want to stay locked).
 local WORKER_URL = "https://tsr-hub.asaiyamain.workers.dev"
 local AGENT_KEY  = "worst"   -- must match the AGENT_KEY variable in Cloudflare
 local EVERY      = 30        -- seconds between heartbeats (a trade starts at the next heartbeat)
 local RESCAN     = 120       -- seconds between pet scans (opens the Inventory briefly)
 local DEBUG      = true      -- print every trade step (card counts, picks, scrolling)
 local OPEN_DELAY = 2         -- seconds to wait after the trade window opens, before choosing pets
+
+-- AUTO-UNLOCK
+local AUTO_UNLOCK = true     -- unlock every locked pet that shows up in the Inventory
+local UNLOCK_SKIP = {}       -- pet names that must NEVER be unlocked, e.g. { "Cinder Eye" }
+local UNLOCK_WATCH = 3       -- seconds between checks while the Inventory happens to be open
+local UNLOCK_COOLDOWN = 8    -- seconds before the SAME pet may be toggled again (lets the lock icon update first)
+local UNLOCK_MAX_FAILS = 3   -- give up on a pet after this many toggles in a row that left it locked
 
 -- TRADE SAFETY (optional but recommended): list the ONLY usernames this account may ever trade with.
 -- Empty = whatever the site sends is allowed. Example: { "Thegreat_Worst", "MyAlt2" }
@@ -170,6 +180,86 @@ local function closeInventory()
     end
 end
 
+-- =====================================================================================
+-- AUTO-UNLOCK: the game's lock button sends  PetActionRequested:FireServer({Action="ToggleLock", PetId=...})
+-- It is a TOGGLE, so it is only ever fired on a card whose Lock icon is visible, never on an unlocked pet.
+-- =====================================================================================
+local petRemote = nil
+local function getPetRemote()
+    if petRemote and petRemote.Parent then return petRemote end
+    local rs = game:GetService("ReplicatedStorage")
+    local svc = rs:FindFirstChild("RemoteServices")
+    local ps = svc and svc:FindFirstChild("PetService")
+    local re = ps and ps:FindFirstChild("RE")
+    petRemote = re and re:FindFirstChild("PetActionRequested")
+    return petRemote
+end
+
+local function nameIn(list, name)
+    for _, n in ipairs(list) do
+        if tostring(n):lower() == tostring(name):lower() then return true end
+    end
+    return false
+end
+
+local function cardLocked(card)
+    local lk = card:FindFirstChild("Lock")
+    return lk ~= nil and lk:IsA("GuiObject") and lk.Visible
+end
+
+local unlockLastTry = {}     -- PetId -> os.clock() of the last toggle (cooldown)
+local unlockFails = {}       -- PetId -> toggles in a row that left the pet locked
+local unlockWarned = false
+local unlockBusy = false
+local function unlockLockedPets()
+    if not AUTO_UNLOCK or unlockBusy then return 0 end
+    local g = invGui()
+    local list = g and walk(g, { "Menu", "Categories", "Pets", "Inner", "List" })
+    if not list then return 0 end
+    local remote = getPetRemote()
+    if not remote then
+        if not unlockWarned then
+            unlockWarned = true
+            warn("[TSR] auto-unlock: ReplicatedStorage.RemoteServices.PetService.RE.PetActionRequested not found")
+        end
+        return 0
+    end
+    unlockBusy = true
+    local count = 0
+    local ok, err = pcall(function()
+        local targets, seenIds = {}, {}
+        for _, d in ipairs(list:GetDescendants()) do
+            local id = d:GetAttribute("PetId")
+            if id and d.Name:sub(1, 4) == "Pet_" and not seenIds[id] then
+                seenIds[id] = true
+                id = tostring(id)
+                local name = tostring(d:GetAttribute("PetName") or "?")
+                if cardLocked(d) then
+                    local cooled = (os.clock() - (unlockLastTry[id] or -1e9)) >= UNLOCK_COOLDOWN
+                    local gaveUp = (unlockFails[id] or 0) >= UNLOCK_MAX_FAILS
+                    if cooled and not gaveUp and not nameIn(UNLOCK_SKIP, name) then
+                        targets[#targets + 1] = { card = d, id = id, name = name, tier = tostring(d:GetAttribute("PetTier") or "?") }
+                    end
+                else
+                    unlockFails[id] = nil   -- seen unlocked: reset, so a later re-lock is handled again
+                end
+            end
+        end
+        for _, t in ipairs(targets) do
+            unlockLastTry[t.id] = os.clock()
+            remote:FireServer({ Action = "ToggleLock", PetId = t.id })
+            task.wait(0.6)
+            local still = t.card.Parent ~= nil and cardLocked(t.card)
+            unlockFails[t.id] = still and ((unlockFails[t.id] or 0) + 1) or nil
+            print("[TSR] auto-unlock: " .. t.name .. " (" .. t.tier .. "): " .. (still and "STILL LOCKED" or "unlocked"))
+            count = count + 1
+        end
+    end)
+    unlockBusy = false
+    if not ok then warn("[TSR] auto-unlock error: " .. tostring(err)) end
+    return count
+end
+
 -- PetId -> { name, tier, multi }. Filled by every Inventory scan; used as a fallback to know
 -- which card in the trade window is which pet.
 local petIndex = {}
@@ -187,7 +277,16 @@ local function readPets()
             local id = d:GetAttribute("PetId")
             if id and d.Name:sub(1, 4) == "Pet_" and not seen[id] then
                 seen[id] = true
-                scanned = scanned + 1
+
+                -- identical pets are drawn as ONE card with a "x2" / "x4" StackCount label
+                local stack = 1
+                local sc = d:FindFirstChild("StackCount")
+                if sc and sc:IsA("GuiObject") and sc.Visible then
+                    local lb = sc:FindFirstChild("Label")
+                    local num = lb and lb:IsA("TextLabel") and lb.Text:gsub(",", ""):match("%d+")
+                    stack = tonumber(num) or 1
+                end
+                scanned = scanned + stack
 
                 local isEq, p = false, d.Parent
                 while p and p ~= list do
@@ -210,7 +309,7 @@ local function readPets()
                 end
                 local key = name .. "|" .. tier
                 if not groups[key] then groups[key] = { name = name, tier = tier, count = 0 } order[#order + 1] = key end
-                groups[key].count = groups[key].count + 1
+                groups[key].count = groups[key].count + stack
             end
         end
     end
@@ -229,6 +328,7 @@ local tradeBusy = false      -- true while a trade job runs (pauses Inventory sc
 local function refreshPets()
     local wasOpen = invIsOn()          -- if you opened it yourself, leave it open
     local opened = openInventory()
+    if opened then pcall(unlockLockedPets) end   -- unlock every locked pet before reading / trading
     local result = opened and readPets() or nil
     if not wasOpen then closeInventory() end
     if result and result.scanned > 0 then
@@ -478,7 +578,7 @@ local function runGive(cmd)
     local target = findPlayer(t.partner)
     if not target then return setTrade(id, "failed", false, t.partner .. " is not in this server") end
 
-    setTrade(id, "scanning", true, "scanning inventory")
+    setTrade(id, "scanning", true, "scanning inventory (and unlocking locked pets)")
     pcall(refreshPets)
     if next(petIndex) == nil then return setTrade(id, "failed", false, "inventory scan found no pets") end
 
@@ -760,3 +860,14 @@ task.spawn(function()
         task.wait(EVERY)
     end
 end)
+
+-- AUTO-UNLOCK watcher: whenever the Inventory is open (opened by the scan, or by you), unlock locked pets.
+-- The Inventory scan above already does this every RESCAN seconds; this only makes it faster when it is open.
+if AUTO_UNLOCK then
+    task.spawn(function()
+        while (type(getgenv) ~= "function") or getgenv().TSR_AGENT_RUN == myRun do
+            if not tradeBusy and invIsOn() then pcall(unlockLockedPets) end
+            task.wait(UNLOCK_WATCH)
+        end
+    end)
+end
