@@ -1,4 +1,5 @@
--- Tap Simulator Reborn agent v8: status + pets + scripts from the site + TRADES from the site + AUTO-UNLOCK
+task.wait()
+-- Tap Simulator Reborn agent v9: status + pets + scripts from the site + TRADES from the site + AUTO-UNLOCK
 -- v5: trade cards are found by the name "TradePet_<id>" (+ PetName / PetTier attributes), the list is
 --     scrolled when it only shows ~10 cards, and every trade step is printed to the console.
 -- v6: works WHILE HATCHING. The Inventory / Trade menus are opened with click -> wait -> click again -> force,
@@ -9,6 +10,10 @@
 -- v7: AUTO-UNLOCK. Locked pets can't be traded, and the game locks some pets automatically (secrets...).
 --     Every Inventory scan (and every 3s while the Inventory is open) unlocks every locked pet.
 --     A pet that is locked again later is unlocked again (UNLOCK_SKIP protects names you want to stay locked).
+-- v9: NO MORE INVENTORY WINDOW for pet data. Pets, equipped pets, storage and locked pets are read from the game's own
+--     replicated data (DataController:GetReplica().Data.Pets.Owned) - the same source AsaiyaHub uses. Auto-unlock still fires
+--     the ToggleLock remote, but picks the locked pets from that data instead of looking for the lock icon on a card.
+--     The window is only used by the old fallbacks below (UI_FALLBACK / the trade-time unlock when no lock field exists).
 local WORKER_URL = "https://tsr-hub.asaiyamain.workers.dev"
 local AGENT_KEY  = "worst"   -- must match the AGENT_KEY variable in Cloudflare
 local EVERY      = 30        -- seconds between heartbeats (a trade starts at the next heartbeat)
@@ -28,6 +33,12 @@ local UNLOCK_MAX_FAILS = 3   -- give up on a pet after this many toggles in a ro
 -- Empty = whatever the site sends is allowed. Example: { "Thegreat_Worst", "MyAlt2" }
 local ALLOWED_PARTNERS = {}
 local MAX_OFFER = 20         -- the game's limit per trade
+
+-- DATA SCAN (v9)
+local UI_FALLBACK = false    -- true = if the game data can't be read, open the Inventory and read the cards (old method)
+local STORAGE_MAX = nil      -- pet storage size, only needed if the script can't find it (see the "[TSR] storage" line in the output)
+local LOCK_FIELD  = nil      -- exact name of the "locked" field in the data, if auto-detection fails (e.g. "Locked")
+local EQUIP_FIELD = nil      -- same for equipped pets (e.g. "Equipped")
 
 if not game:IsLoaded() then game.Loaded:Wait() end
 
@@ -278,6 +289,316 @@ end
 -- which card in the trade window is which pet.
 local petIndex = {}
 
+-- =====================================================================================
+-- DATA SCAN: reads the game's replicated save data. Nothing is opened, hidden or clicked.
+-- =====================================================================================
+local RS = game:GetService("ReplicatedStorage")
+local DATA = (function()
+    local D = {}
+    local LOCK_KEYS  = { "Locked", "Lock", "IsLocked", "Favorite", "Favourite", "Favorited", "Favorites", "Favourites", "LockedPets" }
+    local EQUIP_KEYS = { "Equipped", "EquippedPets", "Equip", "Team", "Loadout" }
+    local POWER_KEYS = { "Multi", "Multiplier", "Mult", "Power", "Strength" }
+    local MAX_KEYS   = { "StorageLimit", "MaxStorage", "StorageMax", "PetStorage", "MaxPets", "Capacity", "Storage", "Slots" }
+    local EQMAX_KEYS = { "EquipLimit", "MaxEquipped", "EquippedLimit", "MaxEquip", "EquipSlots", "EquippedMax", "TeamSize" }
+    local function withField(list, field)
+        if not field then return list end
+        local l = { field }
+        for _, k in ipairs(list) do l[#l + 1] = k end
+        return l
+    end
+    local lockKeys, equipKeys = withField(LOCK_KEYS, LOCK_FIELD), withField(EQUIP_KEYS, EQUIP_FIELD)
+
+    local lockSource, equipSource, dumped, loggedOk, failedWhy, deepDone, busy = nil, nil, false, false, nil, false, false
+
+    local function replica()
+        local okD, data = pcall(function()
+            return require(RS.Controllers.Core.DataController):GetReplica().Data
+        end)
+        if okD and type(data) == "table" and type(data.Pets) == "table" and type(data.Pets.Owned) == "table" then
+            return data
+        end
+    end
+
+    -- id -> true for every pet flagged by one of the keys ({ id, id } lists, { [id] = true } maps, { [slot] = id } maps,
+    -- or a boolean on the pet itself). Second result = where it was found (nil = no such field in the data).
+    local function idSet(data, owned, keys)
+        local set, source = {}, nil
+        for _, holder in ipairs({ data.Pets, data }) do
+            for _, k in ipairs(keys) do
+                local t = holder[k]
+                if type(t) == "table" then
+                    source = source or ((holder == data and "data." or "data.Pets.") .. k)
+                    for key, v in pairs(t) do
+                        if type(v) == "string" or type(v) == "number" then set[tostring(v)] = true
+                        elseif v == true or type(v) == "table" then set[tostring(key)] = true end
+                    end
+                end
+            end
+        end
+        for pid, p in pairs(owned) do
+            if type(p) == "table" then
+                for _, k in ipairs(keys) do
+                    if type(p[k]) == "boolean" then
+                        source = source or ("pet." .. k)
+                        if p[k] then set[tostring(pid)] = true end
+                    end
+                end
+            end
+        end
+        return set, source
+    end
+
+    local function firstOf(t, keys, ty)
+        for _, k in ipairs(keys) do
+            if type(t[k]) == ty then return t[k] end
+        end
+    end
+
+    local function abbr(n)
+        if type(n) ~= "number" then return tostring(n) end
+        local sfx, i = { "", "K", "M", "B", "T", "Qa", "Qi", "Sx" }, 1
+        while math.abs(n) >= 1000 and i < #sfx do n = n / 1000 i = i + 1 end
+        return (string.format("%.2f", n):gsub("%.?0+$", "")) .. sfx[i]
+    end
+
+    -- prints what the data looks like, once, so the right field names can be set when detection fails
+    local function dump(data)
+        if dumped then return end
+        dumped = true
+        local function keyList(t, limit)
+            local l = {}
+            for k, v in pairs(t) do
+                l[#l + 1] = tostring(k) .. "(" .. type(v) .. ")"
+                if #l >= limit then break end
+            end
+            table.sort(l)
+            return table.concat(l, ", ")
+        end
+        print("[TSR] data keys: " .. keyList(data, 60))
+        print("[TSR] data.Pets keys: " .. keyList(data.Pets, 40))
+        local _, sample = next(data.Pets.Owned)
+        if type(sample) == "table" then
+            local parts = {}
+            for k, v in pairs(sample) do
+                if type(v) ~= "table" then parts[#parts + 1] = tostring(k) .. "=" .. tostring(v) end
+            end
+            table.sort(parts)
+            print("[TSR] sample pet: " .. table.concat(parts, ", "))
+        end
+    end
+
+    -- looks for a storage size anywhere in the data (and player attributes / leaderstats)
+    local function deepMax(data, total)
+        local cands, seen, nodes = {}, {}, 0
+        local WORDS = { "storage", "capacity", "maxpet", "petslot", "petinv", "inventorysize", "inventoryslots", "limit", "slots" }
+        local function consider(path, key, v)
+            if type(v) ~= "number" or v < total or v > 1e6 then return end
+            local k = tostring(key):lower()
+            if k:find("used") or k:find("count") or k:find("current") then return end
+            for _, w in ipairs(WORDS) do
+                if k:find(w, 1, true) then
+                    local score = (k:find("max", 1, true) or k:find("capacity", 1, true)) and 2 or 1
+                    cands[#cands + 1] = { path = path, v = v, score = score }
+                    return
+                end
+            end
+        end
+        local function walkT(t, path, depth)
+            if depth > 4 or seen[t] or nodes > 4000 then return end
+            seen[t] = true
+            for k, v in pairs(t) do
+                nodes = nodes + 1
+                local pth = path .. "." .. tostring(k)
+                if type(v) == "table" then
+                    if v ~= data.Pets.Owned then walkT(v, pth, depth + 1) end
+                else
+                    consider(pth, k, v)
+                end
+            end
+        end
+        pcall(walkT, data, "data", 1)
+        pcall(function()
+            for k, v in pairs(lp:GetAttributes()) do consider("player@" .. tostring(k), k, v) end
+            local ls = lp:FindFirstChild("leaderstats")
+            for _, holder in ipairs({ lp, ls }) do
+                if holder then
+                    for _, c in ipairs(holder:GetChildren()) do
+                        if c:IsA("NumberValue") or c:IsA("IntValue") then consider(holder.Name .. "/" .. c.Name, c.Name, c.Value) end
+                    end
+                end
+            end
+        end)
+        table.sort(cands, function(x, y)
+            if x.score ~= y.score then return x.score > y.score end
+            return x.v < y.v
+        end)
+        if not deepDone then
+            deepDone = true
+            if #cands == 0 then
+                print("[TSR] storage search: nothing in the data looks like a storage size (the Storage label is used if it exists, or set STORAGE_MAX)")
+            else
+                local l = {}
+                for i = 1, math.min(#cands, 12) do l[#l + 1] = cands[i].path .. " = " .. tostring(cands[i].v) end
+                print("[TSR] storage candidates (first one is used): " .. table.concat(l, " | "))
+            end
+        end
+        if cands[1] then return cands[1].v, cands[1].path end
+    end
+
+    local function fail(why, data)
+        if failedWhy ~= why then
+            failedWhy = why
+            warn("[TSR] pet data scan unavailable (" .. why .. ")" .. (UI_FALLBACK and " - using the inventory window instead" or ""))
+            if data then pcall(dump, data) end
+        end
+        return nil, why
+    end
+
+    -- Returns result, idx on success (same shape the old window scan produced) or nil, reason.
+    function D.read()
+        local data = replica()
+        if not data then return fail("pet data not loaded yet") end
+        local owned = data.Pets.Owned
+
+        local equipped, eqSrc = idSet(data, owned, equipKeys)
+        local _, lkSrc = idSet(data, owned, lockKeys)
+        lockSource, equipSource = lkSrc or LOCK_FIELD, eqSrc or EQUIP_FIELD
+
+        local idx, groups, order, equippedList, total = {}, {}, {}, {}, 0
+        for pid, p in pairs(owned) do
+            if type(p) == "table" and type(p.Name) == "string" then
+                total = total + 1
+                local id = tostring(pid)
+                local tier = tostring(p.Tier or "Normal")
+                if tier == "Shiny" then tier = "Rainbow" end   -- the game shows Shiny pets as RAINBOW
+                local power = firstOf(p, POWER_KEYS, "number")
+                local multi = power and abbr(power) or nil
+                idx[id] = { name = p.Name, tier = tier, multi = multi }
+                if equipped[id] then
+                    equippedList[#equippedList + 1] = { name = p.Name, tier = tier, multi = multi, affinity = p.Affinity or p.PetAffinity }
+                end
+                local key = p.Name .. "|" .. tier
+                if not groups[key] then groups[key] = { name = p.Name, tier = tier, count = 0 } order[#order + 1] = key end
+                groups[key].count = groups[key].count + 1
+            end
+        end
+        if total == 0 then return fail("no pets in the data", data) end
+
+        local grouped = {}
+        for _, k in ipairs(order) do grouped[#grouped + 1] = groups[k] end
+        table.sort(grouped, function(a, b) return a.count > b.count end)
+
+        -- storage size: STORAGE_MAX, a max stored in the data, a deep search; the Storage label (if it exists) overrides in the heartbeat
+        local max = (STORAGE_MAX and STORAGE_MAX > 0) and STORAGE_MAX or nil
+        if not max then
+            for _, holder in ipairs({ data.Pets, data }) do
+                for _, k in ipairs(MAX_KEYS) do
+                    local v = holder[k]
+                    if not max and type(v) == "number" and v >= total then max = v end
+                end
+            end
+        end
+        local maxFrom
+        if not max then
+            local dm, dp = deepMax(data, total)
+            if dm then max, maxFrom = dm, dp end
+        end
+        local eqMax
+        for _, holder in ipairs({ data.Pets, data }) do
+            eqMax = eqMax or firstOf(holder, EQMAX_KEYS, "number")
+        end
+
+        if not loggedOk then
+            loggedOk = true
+            print(string.format("[TSR] pet data: game data (no inventory window) | %d pets | locked=%s equipped=%s storage max=%s",
+                total, tostring(lockSource), tostring(equipSource), tostring(max) .. (maxFrom and (" (from " .. maxFrom .. ")") or "")))
+            if not equipSource then
+                warn("[TSR] equipped pets not found in the data, the site will show none. Set EQUIP_FIELD in the script.")
+                pcall(dump, data)
+            end
+            if not lockSource then
+                warn("[TSR] locked pets not found in the data (maybe nothing was ever locked). Auto-unlock will use the inventory window only when a trade starts. Set LOCK_FIELD if you know the name.")
+                pcall(dump, data)
+            end
+        end
+        failedWhy = nil
+        return { owned = total, capacity = max, equippedCount = #equippedList, equippedMax = eqMax,
+            scanned = total, stale = false, equipped = equippedList, grouped = grouped }, idx
+    end
+
+    -- AUTO-UNLOCK from the data: the locked pets come from the data, then the same ToggleLock remote is fired.
+    -- Returns how many pets were toggled, or nil when the data has no lock field (then the window method is the only way).
+    function D.unlock()
+        if not AUTO_UNLOCK then return 0 end
+        if busy then return 0 end
+        local data = replica()
+        if not data then return nil end
+        local owned = data.Pets.Owned
+        local locked, src = idSet(data, owned, lockKeys)
+        if not src then return nil end
+        lockSource = src
+
+        for id in pairs(unlockFails) do   -- seen unlocked: reset, so a later re-lock is handled again
+            if not locked[id] then unlockFails[id] = nil end
+        end
+
+        local byId = {}
+        for pid, p in pairs(owned) do byId[tostring(pid)] = p end
+
+        local targets = {}
+        for id in pairs(locked) do
+            local p = byId[id]
+            if type(p) == "table" and type(p.Name) == "string" then
+                local cooled = (os.clock() - (unlockLastTry[id] or -1e9)) >= UNLOCK_COOLDOWN
+                local gaveUp = (unlockFails[id] or 0) >= UNLOCK_MAX_FAILS
+                if cooled and not gaveUp and not nameIn(UNLOCK_SKIP, p.Name) then
+                    targets[#targets + 1] = { id = id, name = p.Name, tier = tostring(p.Tier or "Normal") }
+                end
+            end
+        end
+        if #targets == 0 then return 0 end
+
+        local remote = getPetRemote()
+        if not remote then
+            if not unlockWarned then
+                unlockWarned = true
+                warn("[TSR] auto-unlock: ReplicatedStorage.RemoteServices.PetService.RE.PetActionRequested not found")
+            end
+            return 0
+        end
+
+        busy = true
+        local ok, err = pcall(function()
+            for _, t in ipairs(targets) do
+                unlockLastTry[t.id] = os.clock()
+                remote:FireServer({ Action = "ToggleLock", PetId = t.id })
+                task.wait(0.15)
+            end
+            task.wait(1.5)   -- let the data update, then check what is still locked
+            local data2 = replica() or data
+            local after = idSet(data2, data2.Pets.Owned, lockKeys)
+            local stillCount = 0
+            for i, t in ipairs(targets) do
+                local still = after[t.id] == true
+                unlockFails[t.id] = still and ((unlockFails[t.id] or 0) + 1) or nil
+                if still then stillCount = stillCount + 1 end
+                if #targets <= 10 then
+                    print("[TSR] auto-unlock: " .. t.name .. " (" .. t.tier .. "): " .. (still and "STILL LOCKED" or "unlocked"))
+                end
+            end
+            if #targets > 10 then
+                print(string.format("[TSR] auto-unlock: toggled %d pets, %d still locked", #targets, stillCount))
+            end
+        end)
+        busy = false
+        if not ok then warn("[TSR] auto-unlock error: " .. tostring(err)) end
+        return #targets
+    end
+
+    return D
+end)()
+
+-- (old method, only used when UI_FALLBACK = true) reads the pet cards of the open Inventory
 local function readPets()
     local g = invGui()
     local list = g and walk(g, { "Menu", "Categories", "Pets", "Inner", "List" })
@@ -338,17 +659,39 @@ local function readPets()
 end
 
 local lastPets, lastScanAt = nil, 0
-local tradeBusy = false      -- true while a trade job runs (pauses Inventory scans so they don't collide)
-local function refreshPets()
+local tradeBusy = false      -- true while a trade job runs (pauses pet scans so they don't collide)
+
+-- old window method for the unlock: open the Inventory, unlock every card with a visible Lock icon, close it again.
+-- Only used when the game data has no lock field AND a trade is starting.
+local function unlockViaWindow()
+    local wasOpen = invIsOn()
+    if openInventory() then pcall(unlockLockedPets) end
+    if not wasOpen then closeInventory() end
+end
+
+local function refreshPets(forTrade)
+    local result, idx = DATA.read()
+    if result then
+        lastPets, lastScanAt = result, os.clock()
+        petIndex = idx
+        local n = DATA.unlock()   -- fires ToggleLock for every locked pet (no window)
+        if n == nil and forTrade and AUTO_UNLOCK then pcall(unlockViaWindow) end
+        return
+    end
+    if not UI_FALLBACK then
+        lastScanAt = os.clock() - RESCAN + 15   -- data not ready: try again in ~15 s
+        return
+    end
+    -- UI_FALLBACK: the old method
     local wasOpen = invIsOn()          -- if you opened it yourself, leave it open
     local opened = openInventory()
-    if opened then pcall(unlockLockedPets) end   -- unlock every locked pet before reading / trading
-    local result = opened and readPets() or nil
+    if opened then pcall(unlockLockedPets) end
+    local ui = opened and readPets() or nil
     if not wasOpen then closeInventory() end
-    if result and result.scanned > 0 then
-        lastPets, lastScanAt = result, os.clock()
-    elseif result then
-        lastPets = lastPets or result
+    if ui and ui.scanned > 0 then
+        lastPets, lastScanAt = ui, os.clock()
+    elseif ui then
+        lastPets = lastPets or ui
         lastScanAt = os.clock()
     end
 end
@@ -596,6 +939,23 @@ local function sanitize(trade)   -- whatever the site sent: check it again befor
     return { partner = partner, rules = rules, total = total, delay = delay, expect = tonumber(trade.expect) or total }
 end
 
+-- The game sometimes leaves a FINISHED trade window on screen: empty, "0/20", "Choosing...". That is only visual,
+-- but it must not count as a failed trade. After Ready, an empty window with no Review screen = the trade is over.
+local function windowIsReset()
+    local b = build()
+    return winOpen() and b ~= nil and b.Visible == true and not reviewOpen() and offerCount(b) == 0 and themCount(b) == 0
+end
+local function closeStaleWindow()
+    local g = winGui()
+    if not (g and winOpen()) then return end
+    click(walk(build(), { "Actions", "Cancel", "Button" }))   -- also ends a fresh empty session, if the game opened one
+    task.wait(1)
+    if winOpen() then
+        g.Enabled = false
+        dbg("FORCED closed: leftover trading window")
+    end
+end
+
 local function runGive(cmd)
     local id = cmd.id
     local t, err = sanitize(cmd.trade)
@@ -605,9 +965,9 @@ local function runGive(cmd)
     local target = findPlayer(t.partner)
     if not target then return setTrade(id, "failed", false, t.partner .. " is not in this server") end
 
-    setTrade(id, "scanning", true, "scanning inventory (and unlocking locked pets)")
-    pcall(refreshPets)
-    if next(petIndex) == nil then return setTrade(id, "failed", false, "inventory scan found no pets") end
+    setTrade(id, "scanning", true, "reading pet data (and unlocking locked pets)")
+    pcall(refreshPets, true)
+    if next(petIndex) == nil then return setTrade(id, "failed", false, "no pets found in the pet data") end
 
     -- 1) open the Trade menu (also while hatching) and send the request
     if not openMenu("Trade", { "Game", "LeftButtons", "Trade", "Button" }) then
@@ -661,12 +1021,13 @@ local function runGive(cmd)
     setTrade(id, "ready", true, "pressed Ready, waiting for the other side")
 
     -- 5) what happens after Ready
-    waitFor(function() return reviewOpen() or not winOpen() end, 45)
+    waitFor(function() return reviewOpen() or not winOpen() or windowIsReset() end, 45)
     if reviewOpen() then
         dumpReview()
-        waitFor(function() return not winOpen() end, 60)
+        waitFor(function() return not winOpen() or windowIsReset() end, 60)
     end
     closeMenu("Trade")
+    if winOpen() and windowIsReset() then closeStaleWindow() end
     if winOpen() then
         setTrade(id, "stuck", false, "still open after Ready (see the Review screen output in the console)")
     else
@@ -687,14 +1048,24 @@ local function runReceive(cmd)
     local accepted = waitFor(function()
         if abortRequested then return "abort" end
         if buildOpen() then return "open" end
+        -- v9: the game keeps TradeQuest.Enabled = false while hatching, but it still fills in the text, so
+        -- we do NOT require Enabled. We match the sender's name, force the popup on, and press Accept.
         local q = walk(pg(), { "Tabs", "TradeQuest" })
-        if q and q.Enabled then
+        if q then
             local from = findPlayer(t.partner)
             local l = walk(q, { "Menu", "PlayerSent" })
             local txt = l and norm(l.Text) or ""
             if from and (txt:find(norm(from.Name), 1, true) or txt:find(norm(from.DisplayName), 1, true)) then
-                click(walk(q, { "Menu", "Accept", "Button" }))
-                task.wait(1)
+                forceOn(q, "trade request popup")
+                forceOn(walk(q, { "Menu" }), "trade request menu")
+                local btn = walk(q, { "Menu", "Accept", "Button" })
+                local fired = click(btn)
+                if not fired and btn and type(firesignal) == "function" then
+                    pcall(function() firesignal(btn.MouseButton1Click) end)
+                    pcall(function() firesignal(btn.Activated) end)
+                end
+                dbg("pressed Accept on the trade request, fired =", tostring(fired))
+                task.wait(1.5)
             end
         end
         return false
@@ -725,12 +1096,13 @@ local function runReceive(cmd)
     click(walk(build(), { "Actions", "Ready", "Button" }))
     setTrade(id, "ready", true, "pressed Ready")
 
-    waitFor(function() return reviewOpen() or not winOpen() end, 45)
+    waitFor(function() return reviewOpen() or not winOpen() or windowIsReset() end, 45)
     if reviewOpen() then
         dumpReview()
-        waitFor(function() return not winOpen() end, 60)
+        waitFor(function() return not winOpen() or windowIsReset() end, 60)
     end
     closeMenu("Trade")
+    if winOpen() and windowIsReset() then closeStaleWindow() end
     if winOpen() then
         setTrade(id, "stuck", false, "still open after Ready (see the Review screen output in the console)")
     else
@@ -856,6 +1228,8 @@ local function heartbeat()
     -- counters can be read without opening anything when the labels exist
     local owned, capacity = parseCount(labelText({ "Tabs", "Inventory", "Menu", "Categories", "Pets", "Stats", "Storage" }))
     if owned then pets.owned, pets.capacity = owned, capacity end
+    local eqNow, eqMax = parseCount(labelText({ "Tabs", "Inventory", "Menu", "Categories", "Pets", "Stats", "Equipped" }))
+    if eqNow then pets.equippedCount, pets.equippedMax = eqNow, eqMax end
     pets.stale = (os.clock() - lastScanAt) > RESCAN * 2
 
     local okh, hatches = pcall(readHatches)
@@ -900,12 +1274,15 @@ task.spawn(function()
     end
 end)
 
--- AUTO-UNLOCK watcher: whenever the Inventory is open (opened by the scan, or by you), unlock locked pets.
--- The Inventory scan above already does this every RESCAN seconds; this only makes it faster when it is open.
+-- AUTO-UNLOCK watcher (v9): every UNLOCK_WATCH seconds, unlock every locked pet found in the game data. No window involved.
 if AUTO_UNLOCK then
     task.spawn(function()
         while (type(getgenv) ~= "function") or getgenv().TSR_AGENT_RUN == myRun do
-            if not tradeBusy and invIsOn() then pcall(unlockLockedPets) end
+            if not tradeBusy then
+                local okU, n = pcall(DATA.unlock)
+                -- nil = the game data has no lock field: only then look at the window, and only if it happens to be open
+                if okU and n == nil and invIsOn() then pcall(unlockLockedPets) end
+            end
             task.wait(UNLOCK_WATCH)
         end
     end)
